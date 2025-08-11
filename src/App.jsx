@@ -1,47 +1,48 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Router } from 'react-router-dom';
+import Layout from './components/Layout'
 import LeftSideBar from './components/LeftSideBar';
 import Dashboard from './pages/Dashboard';
+import Members from './pages/Members';
 import DashboardAdmin from './pages/Dashboard_admin';
 import Task from './pages/task_employee';
 import Task1 from './pages/task_admin';
 import TaskAssign from './pages/task_assign';
 import ProjectCreate from './pages/project_create';
+import SignIn from './components/SignIn';
+import SignUp from './components/SignUp';
 import FileManager from './pages/file_sharing';
-
+import Profile from './pages/set_profile';
 const App = () => {
   const customColor = "#AA405B";
   const user_id = 1; // Can be dynamically set later
 
   return (
     <BrowserRouter>
-      <div className="flex min-h-screen flex-col bg-gray-100">
-        {/* Top Color Line */}
-        <div className="h-10 w-full" style={{ backgroundColor: customColor }}></div>
+    <Routes>
+       {/* Public routes without sidebar */}
+        <Route path="/" element={<SignUp />} />
+        <Route path="/signin" element={<SignIn />} />
 
-        <div className="flex flex-1">
-          {/* Sidebar */}
-          <div className="w-1/5 text-white bg-gray-50">
-           <LeftSideBar userId={user_id} />
+ {/* Protected routes with sidebar */}
+        <Route element={<Layout />}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/" element={user_id === 1 ? <DashboardAdmin /> : <Dashboard />} />
+          <Route path="/tasks" element={user_id === 1 ? <Task1 /> : <Task />} />
+          <Route path="/assign-task" element={<TaskAssign />} />
+          <Route path="/project-create" element={<ProjectCreate />} />
+          <Route path="/members" element={<Members />} />
+          <Route path="/profile" element={<Profile />} />
+           <Route path="/file-sharing" element={<FileManager />} />
+        </Route>
+    </Routes>
+      
 
-          </div>
+       
 
-          {/* Main Content Area with Routes */}
-          <div className="w-4/5 bg-gray-50 p-4">
-            <Routes>
-  <Route path="/" element={user_id === 1 ? <DashboardAdmin /> : <Dashboard />} />
-  <Route path="/tasks" element={user_id === 1 ? <Task1 /> : <Task />} />
-  <Route path="/assign-task" element={<TaskAssign />} />
-  <Route path="/project-create" element={<ProjectCreate />} />
-  <Route path="/file-sharing" element={<FileManager />} />
-</Routes>
+         
 
-          </div>
-        </div>
-
-        {/* Bottom Color Line */}
-        <div className="h-10 w-full" style={{ backgroundColor: customColor }}></div>
-      </div>
+        
     </BrowserRouter>
   );
 };

@@ -36,7 +36,7 @@ const LeftSideBar = ({ userId }) => {
           {/* Dashboard */}
           <li>
             <a
-              href="#"
+              href="/dashboard"
               className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }} // Custom color for text
             >
@@ -81,44 +81,41 @@ const LeftSideBar = ({ userId }) => {
             </Link>
           </li>
 
-          {/* Members */}
-          <li className="mb-5">
-            {" "}
-            {/* Added margin-bottom to create space between Members and the bottom items */}
-            <a
-              href="#"
+         {/* Members */}
+          <li className="mb-5"> {/* Added margin-bottom to create space between Members and the bottom items */}
+            <Link 
+              to="/members" 
               className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }} // Custom color for text
             >
               <FaUsers className="text-xl" />
               <span>Members</span>
-            </a>
+            </Link>
           </li>
         </ul>
       </nav>
 
-      {/* Settings and Logout Section */}
-      <div className="mt-18 space-y-3">
-        {" "}
-        {/* Reduced space between Settings and Logout */}
+   {/* Settings and Logout Section */}
+      <div className="mt-18 space-y-3"> {/* Reduced space between Settings and Logout */}
         {/* Settings */}
-        <a
-          href="#"
+        <a 
+          href="/profile" 
           className="text-sm p-2 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
           style={{ color: customColor }} // Custom color for text
         >
           <FaCog className="text-xl" />
           <span>Settings</span>
         </a>
+
         {/* Logout */}
-        <a
-          href="#"
+        <Link 
+          to="/signin" 
           className="text-sm p-2 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
           style={{ color: customColor }} // Custom color for text
         >
           <FaSignOutAlt className="text-xl" />
           <span>Logout</span>
-        </a>
+        </Link>
       </div>
     </div>
   );
