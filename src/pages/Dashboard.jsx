@@ -10,7 +10,7 @@ const Dashboard = () => {
 
   return (
     <div className="ml-5 w-full">
-      <h1 className="text-xl font-semibold text-black mt-2">Hi, Kim Namjoon</h1>
+      <h1 className="text-xl font-semibold text-black mt-2">Hi, Kim</h1>
       <p className="text-sm" style={{ color: customColor }}>Let's finish your task today!</p>
 
       <div className="flex">

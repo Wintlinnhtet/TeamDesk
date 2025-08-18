@@ -4,25 +4,28 @@ import Layout from './components/Layout'
 import LeftSideBar from './components/LeftSideBar';
 import Dashboard from './pages/Dashboard';
 import Members from './pages/Members';
+import AddMember from './components/AddMember';
 import DashboardAdmin from './pages/Dashboard_admin';
 import Task from './pages/task_employee';
 import Task1 from './pages/task_admin';
 import TaskAssign from './pages/task_assign';
 import ProjectCreate from './pages/project_create';
 import SignIn from './components/SignIn';
-import SignUp from './components/SignUp';
 import FileManager from './pages/file_sharing';
 import Profile from './pages/set_profile';
+import Register from './components/Register';
 const App = () => {
   const customColor = "#AA405B";
   const user_id = 1; // Can be dynamically set later
 
   return (
     <BrowserRouter>
-    <Routes>
-       {/* Public routes without sidebar */}
-        <Route path="/" element={<SignUp />} />
+   <Routes>
+        {/* Public routes without sidebar */}
+        {/* <Route path="/" element={<SignUp />} /> */}
         <Route path="/signin" element={<SignIn />} />
+        <Route path="/add-member" element={<AddMember />} />
+        <Route path="/register" element={<Register />} />
 
  {/* Protected routes with sidebar */}
         <Route element={<Layout />}>

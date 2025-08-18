@@ -1,9 +1,11 @@
 import React from 'react';
+import { useNavigate } from "react-router-dom";
 import { FiPhone, FiMail } from 'react-icons/fi';
 import { FaSearch } from 'react-icons/fa';
 
 const Members = () => {
     const customColor = "#AA405B";
+    const navigate = useNavigate();
   return (
    
     <div className="bg-gray-100 min-h-screen p-10">
@@ -29,7 +31,8 @@ const Members = () => {
       Filter
     </button>
 
-    <button className="bg-[#AA405B] text-white px-5 py-2 rounded-md hover:bg-[#e34e13]">
+    <button className="bg-[#AA405B] text-white px-5 py-2 rounded-md"
+    onClick={() => navigate("/add-member")}>
       + Add Candidate
     </button>
   </div>

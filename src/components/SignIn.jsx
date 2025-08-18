@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useState } from 'react'; 
 
 
+import { API_BASE } from "../config";   // adjust path if needed
 
 const SignIn = () => {
     const customColor = "#AA405B"; // Custom color for the text
@@ -27,7 +28,7 @@ const SignIn = () => {
     e.preventDefault();
 
     try {
-      const res = await fetch('http://localhost:5000/signin', { // adjust URL if needed
+        const res = await fetch(`${API_BASE}/signin`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(formData),
