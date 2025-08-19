@@ -7,7 +7,7 @@ from bson.objectid import ObjectId
 app = Flask(__name__)
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "192.168.1.9"   # <-- put your LAN IP here (e.g., 192.168.x.x)
+SERVER_IP = "172.20.1.227"   # <-- put your LAN IP here (e.g., 192.168.x.x)
 
 # Allow both localhost (dev) and your LAN origin (other devices)
 FRONTEND_ORIGINS = [
