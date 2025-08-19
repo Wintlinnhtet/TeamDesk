@@ -13,6 +13,7 @@ import ProjectCreate from './pages/project_create';
 import SignIn from './components/SignIn';
 import FileManager from './pages/file_sharing';
 import Profile from './pages/set_profile';
+import Projects from './pages/Projects';
 import Register from './components/Register';
 const App = () => {
   const customColor = "#AA405B";
@@ -32,7 +33,8 @@ const App = () => {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/" element={user_id === 1 ? <DashboardAdmin /> : <Dashboard />} />
           <Route path="/tasks" element={user_id === 1 ? <Task1 /> : <Task />} />
-          <Route path="/assign-task" element={<TaskAssign />} />
+          <Route path="/assign-task" element={<TaskAssign />} />  
+           <Route path="/projects" element={<Projects />} />  
           <Route path="/project-create" element={<ProjectCreate />} />
           <Route path="/members" element={<Members />} />
           <Route path="/profile" element={<Profile />} />

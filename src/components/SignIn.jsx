@@ -38,7 +38,11 @@ const SignIn = () => {
 
       if (res.ok) {
         setMessage(data.message);
-        navigate('/dashboard'); // <-- NEW: redirect on success
+       
+localStorage.setItem("user", JSON.stringify(data.user));
+navigate("/dashboard");
+
+   
       } else {
         setMessage(data.error || 'Login failed');
       }

@@ -1,7 +1,12 @@
 import React from 'react';
+import { useNavigate } from "react-router-dom";
+import { getCurrentUser } from "../auth";
+            // user?._id is your logged-in id
 
 const Dashboard = () => {
   const customColor = "#AA405B";
+  const navigate = useNavigate();
+  const user = getCurrentUser(); 
   const batchmates = [
     { name: 'Rinsen Jey', title: 'UI/UX Designer', img: '1person.jpg' },
     { name: 'Kim Jee yong', title: 'UI/UX Designer', img: '2person.jpg' },
@@ -23,6 +28,7 @@ const Dashboard = () => {
               <h2 className="text-xl font-bold" style={{ color: customColor }}>Today Task</h2>
               <p className="text-gray-600">Check your daily tasks and schedules</p>
               <button
+               onClick={() => navigate("/projects")}
                 className="mt-4 text-white px-4 py-2 rounded-lg shadow-md"
                 style={{ backgroundColor: customColor }}
               >
