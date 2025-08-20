@@ -3,6 +3,7 @@ from flask_cors import CORS
 from database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -55,22 +56,6 @@ def add_member():
     })
     return jsonify({"message": "Member added successfully!"}), 201
 
-# -------------------- GET USER --------------------
-@app.get("/get-user/<user_id>")
-def get_user(user_id):
-    try:
-        user = users_collection.find_one({"_id": ObjectId(user_id)})
-        if not user:
-            return jsonify({"error": "User not found"}), 404
-        return jsonify({
-            "name": user.get("name", ""),
-            "dob": user.get("dob", ""),
-            "phone": user.get("phone", ""),
-            "address": user.get("address", ""),
-            "email": user.get("email", "")
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 # -------------------- UPDATE USER --------------------
 @app.patch("/update-user/<user_id>")
@@ -261,6 +246,120 @@ def create_task():
     }
     ins = tasks_collection.insert_one(doc)
     return jsonify({"message": "Task created", "task_id": str(ins.inserted_id)}), 201
+
+
+# --- list tasks (by assignee and/or project) ---
+@app.route("/tasks", methods=["GET", "POST", "OPTIONS"])
+def tasks():
+    # ---------- LIST (GET /tasks?assignee_id=...&project_id=...) ----------
+    if request.method == "GET":
+        try:
+            q = {}
+
+            assignee_id = request.args.get("assignee_id")
+            if assignee_id:
+                try:
+                    q["assignee_id"] = ObjectId(assignee_id)
+                except Exception:
+                    return jsonify({"error": "Invalid assignee_id"}), 400
+
+            project_id = request.args.get("project_id")
+            if project_id:
+                try:
+                    q["project_id"] = ObjectId(project_id)
+                except Exception:
+                    return jsonify({"error": "Invalid project_id"}), 400
+
+            cur = tasks_collection.find(q).sort("created_at", -1)
+            out = []
+            for t in cur:
+                out.append({
+                    "_id": str(t["_id"]),
+                    "project_id": str(t["project_id"]),
+                    "assignee_id": str(t["assignee_id"]),
+                    "title": t.get("title", ""),
+                    "description": t.get("description", ""),
+                    "start_at": t.get("start_at"),
+                    "end_at": t.get("end_at"),
+                    "status": t.get("status", "todo"),
+                    "project_role": t.get("project_role"),
+                    "created_by": str(t["created_by"]) if t.get("created_by") else None,
+                    "created_at": t["created_at"].isoformat() if isinstance(t.get("created_at"), datetime) else None,
+                })
+            return jsonify(out)
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    # ---------- CREATE (POST /tasks) ----------
+    if request.method == "POST":
+        data = request.get_json() or {}
+        try:
+            project_id = ObjectId(data.get("project_id"))
+            assignee_id = ObjectId(data.get("assignee_id"))
+        except Exception:
+            return jsonify({"error": "Invalid project_id or assignee_id"}), 400
+
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+        start_at = data.get("start_at")   # ISO string
+        end_at = data.get("end_at")       # ISO string
+        created_by = data.get("created_by")
+        project_role = (data.get("project_role") or "").strip()
+
+        if not title:
+            return jsonify({"error": "Task title is required"}), 400
+
+        proj = projects_collection.find_one({"_id": project_id})
+        if not proj:
+            return jsonify({"error": "Project not found"}), 404
+        if assignee_id not in proj.get("member_ids", []):
+            return jsonify({"error": "Assignee must be a member of this project"}), 400
+
+        doc = {
+            "project_id": project_id,
+            "assignee_id": assignee_id,
+            "title": title,
+            "description": description,
+            "start_at": start_at,
+            "end_at": end_at,
+            "status": "todo",
+            "project_role": project_role or None,
+            "created_by": ObjectId(created_by) if created_by else None,
+            "created_at": datetime.utcnow(),
+        }
+        ins = tasks_collection.insert_one(doc)
+        return jsonify({"message": "Task created", "task_id": str(ins.inserted_id)}), 201
+
+    # ---------- Preflight (OPTIONS) ----------
+    return ("", 204)
+
+
+@app.get("/get-user/<user_id>")
+def get_user(user_id):
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # normalize experience: prefer array; if stored as JSON string, parse it
+        exp = user.get("experience", [])
+        if isinstance(exp, str):
+            try:
+                import json
+                exp = json.loads(exp)
+            except Exception:
+                exp = []
+
+        return jsonify({
+            "name": user.get("name", ""),
+            "dob": user.get("dob", ""),
+            "phone": user.get("phone", ""),
+            "address": user.get("address", ""),
+            "email": user.get("email", ""),
+            "experience": exp,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # -------------------- bind to LAN --------------------
 if __name__ == "__main__":
