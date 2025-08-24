@@ -287,7 +287,7 @@ def tasks_collection_handler():
         q = {}
         assignee_id = request.args.get("assignee_id")
         project_id = request.args.get("project_id")
-
+        status = request.args.get("status")
         if assignee_id:
             aid = to_object_id(assignee_id)
             if not aid:
@@ -300,6 +300,8 @@ def tasks_collection_handler():
                 return jsonify({"error": "Invalid project_id"}), 400
             q["project_id"] = pid
 
+        if status:
+            q["status"] = status  # <-- NEW
         cur = tasks_collection.find(q).sort("created_at", -1)
         out = []
         for t in cur:

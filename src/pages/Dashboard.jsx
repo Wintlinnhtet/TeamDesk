@@ -7,11 +7,45 @@ const Dashboard = () => {
   const customColor = "#AA405B";
   const navigate = useNavigate();
   const user = getCurrentUser(); // {_id, name, email, role, ...}
+ const [batchmates, setBatchmates] = useState([]);
 
+ const initials = (name = "") =>
+   name
+     .trim()
+     .split(/\s+/)
+     .map(s => s[0])
+     .slice(0, 2)
+     .join("")
+     .toUpperCase();
   const [experience, setExperience] = useState([]);  // from user doc
   const [projects, setProjects] = useState([]);      // projects for this user
   const [tasks, setTasks] = useState([]);            // tasks assigned to this user
   const [msg, setMsg] = useState("");
+ // Fast lookup: projectId -> project
+// 1) Fast lookup: projectId -> project
+const projectsById = useMemo(() => {
+  const map = {};
+  for (const p of projects) map[p._id] = p;
+  return map;
+}, [projects]);
+
+// 2) Upcoming tasks (with project name), derived directly from `tasks`
+const upcomingWithProject = useMemo(() => {
+  const withDates = (tasks || [])
+    .map(t => ({ ...t, startMs: t.start_at ? Date.parse(t.start_at) : Infinity }))
+    .sort((a, b) => a.startMs - b.startMs)
+    .slice(0, 6);
+  return withDates.map(t => ({
+    ...t,
+    projectName: projectsById[t.project_id]?.name || "Untitled project",
+  }));
+}, [tasks, projectsById]);
+
+
+ // (Optional) show today's date in the header
+ const today = new Date();
+ const monthLabel = today.toLocaleString("en-US", { month: "long" });
+ const dayLabel = `${today.getDate()}, ${today.toLocaleString("en-US", { weekday: "short" })}`;
 
   // Load user details (experience), projects, and tasks
   useEffect(() => {
@@ -75,11 +109,46 @@ const Dashboard = () => {
     return withDates;
   }, [tasks]);
 
-  const batchmates = [
-    { name: 'Rinsen Jey', title: 'UI/UX Designer', img: '1person.jpg' },
-    { name: 'Kim Jee yong', title: 'UI/UX Designer', img: '2person.jpg' },
-    { name: 'Kim Jee yong', title: 'UI/UX Designer', img: '3person.jpg' },
-  ];
+ useEffect(() => {
+   let cancelled = false;
+   (async () => {
+     try {
+       if (!projects?.length) {
+         if (!cancelled) setBatchmates([]);
+         return;
+       }
+       // fetch members for each project (this endpoint returns name/email/position)
+       const allMembersArrays = await Promise.all(
+         projects.map(async (p) => {
+           const r = await fetch(`${API_BASE}/projects/${p._id}`);
+           const d = await r.json();
+           if (!r.ok) throw new Error(d.error || `Failed ${r.status}`);
+           return Array.isArray(d.members) ? d.members : [];
+         })
+       );
+       // flatten + dedupe by member _id, exclude me
+       const uniq = new Map();
+       for (const arr of allMembersArrays) {
+         for (const m of arr) {
+           if (!m?._id || m._id === user?._id) continue;
+           if (!uniq.has(m._id)) {
+             uniq.set(m._id, {
+               _id: m._id,
+               name: m.name || m.email || "Member",
+               title: m.position || "Member",
+               img: m.avatar || null, // if you store an avatar later
+             });
+           }
+         }
+       }
+       if (!cancelled) setBatchmates([...uniq.values()]);
+     } catch (e) {
+       console.error("batchmates load failed:", e);
+       if (!cancelled) setBatchmates([]);
+     }
+   })();
+   return () => { cancelled = true; };
+ }, [projects, user?._id, API_BASE]);
 
   return (
     <div className="ml-5 w-full">
@@ -186,22 +255,74 @@ const Dashboard = () => {
         {/* RIGHT COLUMN (kept, just greeting above already personalizes) */}
         <div className="flex flex-col w-1/4 space-y-4 mr-10">
           <div className="p-3 rounded-lg" style={{ backgroundColor: customColor }}>
-            <h2 className="text-xl font-bold text-white">{user?.name || "Profile"}</h2>
-            <p className="text-white">{user?.position || "—"}</p>
-            {/* ... rest of your right column remains ... */}
+             <h2 className="text-xl font-bold text-white">
+  {user?.name || user?.email || "User"}
+</h2>
+<p className="text-white">{user?.role || "Member"}</p>
+
+            <div className="mt-4">
+              <div className="flex justify-between">
+                <span className="text-white font-semibold">{monthLabel}</span>
+     <span className="text-white font-semibold">{dayLabel}</span>
+              </div>
+<div className="mt-2 space-y-2 bg-white shadow-md p-4 rounded-lg">
+  {upcomingWithProject.length === 0 ? (
+    <div className="text-center text-sm text-gray-500">No upcoming tasks</div>
+  ) : (
+    upcomingWithProject.slice(0, 4).map(t => (
+      <div key={t._id} className="flex justify-between p-2 bg-white rounded-lg shadow-md relative">
+        <div className="absolute left-0 top-0 h-full w-2" style={{ backgroundColor: customColor }} />
+        <span className="pr-3 font-medium" style={{ color: customColor }}>{t.title}</span>
+        <span className="text-xs text-gray-500 truncate">{t.projectName}</span>
+      </div>
+    ))
+  )}
+
+  <div className="text-center mt-4">
+    <button
+      className="px-4 py-2 bg-white text-gray-600 rounded-lg shadow-md border-2 transition-colors"
+      style={{ color: customColor, borderColor: customColor }}
+      onMouseEnter={(e) => { e.target.style.backgroundColor = customColor; e.target.style.color = 'white'; }}
+      onMouseLeave={(e) => { e.target.style.backgroundColor = 'white'; e.target.style.color = customColor; }}
+      onClick={() => {
+        const first = upcomingWithProject[0];
+        if (first) navigate(``);
+        else navigate("");
+      }}
+    >
+      See More
+    </button>
+  </div>
+</div>
+              
+            </div>
           </div>
 
           <div className="rounded-xl p-2 w-full mb-3" style={{ backgroundColor: customColor }}>
             <h2 className="text-center font-semibold text-lg mb-4 text-white">Batchmates</h2>
-            {batchmates.map((mate, index) => (
-              <div key={index} className="flex items-center bg-white rounded-lg p-2 mb-2">
-                <img src={mate.img} alt={mate.name} className="w-10 h-10 rounded-full object-cover" />
-                <div className="ml-3">
-                  <p className="text-sm font-medium text-gray-800">{mate.name}</p>
-                  <p className="text-xs" style={{ color: customColor }}>{mate.title}</p>
-                </div>
-              </div>
-            ))}
+          {batchmates.length === 0 ? (
+   <div className="bg-white rounded-lg p-3 text-center text-sm text-gray-500">No teammates yet</div>
+ ) : (
+   batchmates.slice(0, 6).map((mate) => (
+     <div key={mate._id} className="flex items-center bg-white rounded-lg p-2 mb-2">
+       {mate.img ? (
+         <img src={mate.img} alt={mate.name} className="w-10 h-10 rounded-full object-cover" />
+       ) : (
+         <div
+           className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
+           style={{ backgroundColor: customColor }}
+           aria-label={mate.name}
+         >
+           {initials(mate.name)}
+         </div>
+       )}
+       <div className="ml-3 min-w-0">
+         <p className="text-sm font-medium text-gray-800 truncate">{mate.name}</p>
+         <p className="text-xs truncate" style={{ color: customColor }}>{mate.title}</p>
+       </div>
+     </div>
+   ))
+ )}
             <button className="bg-white w-full text-sm font-medium py-1 mt-2 rounded-lg shadow hover:bg-gray-100">
               See all
             </button>
