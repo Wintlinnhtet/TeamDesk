@@ -182,6 +182,7 @@ def get_members():
         return jsonify({"error": str(e)}), 500
 
 # -------------------- PROJECTS (GET list + POST create) --------------------
+# -------------------- PROJECTS (GET list + POST create) --------------------
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
     if request.method == "GET":
@@ -222,7 +223,7 @@ def projects():
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # Example create (adjust as your real schema)
+    # POST create
     if request.method == "POST":
         data = request.get_json() or {}
         name = (data.get("name") or "").strip()
@@ -240,10 +241,13 @@ def projects():
             "end_at": data.get("end_at"),
             "created_at": datetime.utcnow(),
         }
-        ins = projects_collection.insert_one(doc)
-        return jsonify({"message": "Project created", "project_id": str(ins.inserted_id)}), 201
+        try:
+            ins = projects_collection.insert_one(doc)
+            return jsonify({"message": "Project created", "project_id": str(ins.inserted_id)}), 201
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
-# -------------------- PROJECT (one) with members --------------------
+# --- PROJECT (one) with members including project roles --- #
 @app.get("/projects/<project_id>")
 def get_project(project_id):
     try:
@@ -256,17 +260,26 @@ def get_project(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     member_ids = proj.get("member_ids", [])
-    members = list(users_collection.find(
-        {"_id": {"$in": member_ids}},
-        {"name": 1, "email": 1, "position": 1}
-    ))
+    
+    # Fetch tasks for the project and get the project_role for each member
+    tasks = list(tasks_collection.find({"project_id": pid}))
+    member_roles = {}
+
+    for task in tasks:
+        assignee_id = str(task["assignee_id"])  # Assignee ID
+        project_role = task.get("project_role", "No role")  # Get project role for the task
+        member_roles[assignee_id] = project_role  # Map assignee to project role
+
+    # Get member details from the users collection and map the role
+    members = list(users_collection.find({"_id": {"$in": [ObjectId(mid) for mid in member_ids]}}))
     members = [
         {
             "_id": str(m["_id"]),
             "name": m.get("name", ""),
             "email": m.get("email", ""),
-            "position": m.get("position", "")
-        } for m in members
+            "project_role": member_roles.get(str(m["_id"]), "No role assigned")  # Add role for each member
+        }
+        for m in members
     ]
 
     leader_id = proj.get("leader_id")
@@ -275,7 +288,7 @@ def get_project(project_id):
         "name": proj.get("name", ""),
         "description": proj.get("description", ""),
         "leader_id": str(leader_id) if leader_id else None,
-        "members": members,
+        "members": members,  # Include members with their project roles
         "start_at": proj.get("start_at"),
         "end_at": proj.get("end_at")
     })
@@ -359,60 +372,103 @@ def tasks_collection_handler():
     ins = tasks_collection.insert_one(doc)
     return jsonify({"message": "Task created", "task_id": str(ins.inserted_id)}), 201
 
-# -------------------- TASK detail (PATCH / DELETE) --------------------
-@app.route("/tasks/<task_id>", methods=["PATCH", "DELETE"])
+@app.route("/tasks/<task_id>", methods=["GET", "PATCH", "DELETE"])
 def task_detail(task_id):
     tid = to_object_id(task_id)
     if not tid:
         return jsonify({"error": "invalid task id"}), 400
 
+    # Fetch task from the database
     t = tasks_collection.find_one({"_id": tid})
     if not t:
         return jsonify({"error": "Task not found"}), 404
 
+    # Handle GET (fetch task details)
+    if request.method == "GET":
+        return jsonify({
+            "_id": str(t["_id"]),
+            "project_id": str(t["project_id"]),
+            "assignee_id": str(t["assignee_id"]),
+            "title": t.get("title", ""),
+            "description": t.get("description", ""),
+            "start_at": t.get("start_at"),
+            "end_at": t.get("end_at"),
+            "status": t.get("status", "todo"),
+            "project_role": t.get("project_role"),
+            "created_by": str(t["created_by"]) if t.get("created_by") else None,
+            "created_at": t["created_at"].isoformat() if isinstance(t.get("created_at"), datetime) else t.get("created_at"),
+            "updated_at": t["updated_at"].isoformat() if isinstance(t.get("updated_at"), datetime) else t.get("updated_at"),
+            "progress": t.get("progress", 0),  # Return progress (if available)
+        })
+
+    # Handle PATCH (update task details)
+    if request.method == "PATCH":
+        data = request.get_json() or {}
+        updates = {}
+
+        if "title" in data:
+            title = (data.get("title") or "").strip()
+            if not title:
+                return jsonify({"error": "Title is required"}), 400
+            updates["title"] = title
+
+        if "description" in data:
+            updates["description"] = (data.get("description") or "").strip()
+
+        if "project_role" in data:
+            pr = (data.get("project_role") or "").strip()
+            updates["project_role"] = pr or None
+
+        if "start_at" in data:
+            updates["start_at"] = data.get("start_at") or None
+
+        if "end_at" in data:
+            updates["end_at"] = data.get("end_at") or None
+
+        if "assignee_id" in data:
+            new_assignee = to_object_id(data.get("assignee_id"))
+            if not new_assignee:
+                return jsonify({"error": "invalid assignee_id"}), 400
+
+            proj = projects_collection.find_one({"_id": t["project_id"]})
+            if not proj:
+                return jsonify({"error": "Project not found"}), 404
+            if new_assignee not in proj.get("member_ids", []):
+                return jsonify({"error": "Assignee must be a member of this project"}), 400
+
+            updates["assignee_id"] = new_assignee
+
+        # Handle progress update
+        if "progress" in data:
+            progress = data.get("progress")
+            if progress < 0 or progress > 100:
+                return jsonify({"error": "Progress must be between 0 and 100"}), 400
+            updates["progress"] = progress
+
+            # If progress is 100%, set status to completed
+            if progress == 100:
+                updates["status"] = "completed"
+            elif "status" not in updates:  # Only update status to "todo" if not already set
+                updates["status"] = "todo"
+
+        # Handle status update
+        if "status" in data and updates.get("status") != "completed":
+            updates["status"] = data["status"]
+
+        updates["updated_at"] = datetime.utcnow()
+
+        # Update the task in the database
+        result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
+        
+        if result.modified_count == 0:
+            return jsonify({"error": "No changes were made"}), 400
+
+        return jsonify({"message": "Task updated successfully", "task": updates}), 200
+
+    # Handle DELETE (delete task)
     if request.method == "DELETE":
         tasks_collection.delete_one({"_id": tid})
         return jsonify({"ok": True}), 200
-
-    # PATCH
-    data = request.get_json() or {}
-    updates = {}
-
-    if "title" in data:
-        title = (data.get("title") or "").strip()
-        if not title:
-            return jsonify({"error": "Title is required"}), 400
-        updates["title"] = title
-
-    if "description" in data:
-        updates["description"] = (data.get("description") or "").strip()
-
-    if "project_role" in data:
-        pr = (data.get("project_role") or "").strip()
-        updates["project_role"] = pr or None
-
-    if "start_at" in data:
-        updates["start_at"] = data.get("start_at") or None
-
-    if "end_at" in data:
-        updates["end_at"] = data.get("end_at") or None
-
-    if "assignee_id" in data:
-        new_assignee = to_object_id(data.get("assignee_id"))
-        if not new_assignee:
-            return jsonify({"error": "invalid assignee_id"}), 400
-
-        proj = projects_collection.find_one({"_id": t["project_id"]})
-        if not proj:
-            return jsonify({"error": "Project not found"}), 404
-        if new_assignee not in proj.get("member_ids", []):
-            return jsonify({"error": "Assignee must be a member of this project"}), 400
-
-        updates["assignee_id"] = new_assignee
-
-    updates["updated_at"] = datetime.utcnow()
-    tasks_collection.update_one({"_id": tid}, {"$set": updates})
-    return jsonify({"ok": True}), 200
 
 # -------------------- USER (read) --------------------
 @app.get("/get-user/<user_id>")

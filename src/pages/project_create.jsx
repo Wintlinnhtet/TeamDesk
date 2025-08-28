@@ -86,49 +86,49 @@ useEffect(() => {
     return dt.toISOString();
   };
 
-  const onCreate = async () => {
-    setMsg("");
-    if (!projectName.trim()) {
-      setMsg("Project name is required.");
-      return;
-    }
-    if (selectedMembers.length === 0) {
-      setMsg("Please add at least one member.");
-      return;
-    }
+ const onCreate = async () => {
+  setMsg("");
+  if (!projectName.trim()) {
+    setMsg("Project name is required.");
+    return;
+  }
+  if (selectedMembers.length === 0) {
+    setMsg("Please add at least one member.");
+    return;
+  }
 
-   const payload = {
-  name: projectName.trim(),
-  description: description.trim(),
-  member_ids: selectedMembers.map(m => m._id),
-  leader_id: leaderId, // <-- important
-  start_at: isoCombine(startDate, startTime),
-  end_at: isoCombine(endDate, endTime),
+  const payload = {
+    name: projectName.trim(),
+    description: description.trim(),
+    member_ids: selectedMembers.map((m) => m._id),
+    leader_id: leaderId, // <-- Ensure leaderId is passed here
+    start_at: isoCombine(startDate, startTime),
+    end_at: isoCombine(endDate, endTime),
+  };
+
+  try {
+    const r = await fetch(`${API_BASE}/projects`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (r.ok) {
+      setMsg(data.message || "Project created");
+      // reset (optional)
+      setProjectName("");
+      setDescription("");
+      setSelectedMembers([]);
+      setSelectedMemberId("");
+    } else {
+      setMsg(data.error || `Failed (${r.status})`);
+    }
+  } catch (e) {
+    console.error(e);
+    setMsg("Server error. Please try again.");
+  }
 };
 
-
-    try {
-      const r = await fetch(`${API_BASE}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (r.ok) {
-        setMsg(data.message || "Project created");
-        // reset (optional)
-        setProjectName("");
-        setDescription("");
-        setSelectedMembers([]);
-        setSelectedMemberId("");
-      } else {
-        setMsg(data.error || `Failed (${r.status})`);
-      }
-    } catch (e) {
-      console.error(e);
-      setMsg("Server error. Please try again.");
-    }
-  };
 
   return (
     <div className="bg-white max-w-xl mx-auto mt-6 mb-6 p-6 rounded-2xl shadow-md border-2" style={{ borderColor: customColor }}>

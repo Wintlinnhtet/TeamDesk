@@ -16,6 +16,7 @@ import Profile from './pages/set_profile';
 import Projects from './pages/Projects';
 import Register from './components/Register';
 import ProjectTasks from './pages/ProjectTasks';
+import TaskDetail from './pages/TaskDetail';
 const App = () => {
   const customColor = "#AA405B";
   const user_id = 1; // Can be dynamically set later
@@ -35,6 +36,7 @@ const App = () => {
           <Route path="/" element={user_id === 1 ? <DashboardAdmin /> : <Dashboard />} />
           <Route path="/tasks" element={ <Task />} />
           <Route path="/tasks_admin" element= {<Task1 />} />
+          <Route path="/task-detail/:taskId" element={<TaskDetail />} />
           <Route path="/assign-task" element={<TaskAssign />} />  
            <Route path="/projects" element={<Projects />} />  
           <Route path="/project-create" element={<ProjectCreate />} />

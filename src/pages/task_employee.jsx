@@ -2,7 +2,7 @@ import React from "react";
  import { FaSearch, FaBell, FaChevronRight, FaChevronLeft } from "react-icons/fa";
  import { useEffect, useMemo, useState } from "react";
  import { API_BASE } from "../config";
-
+import { useParams, useNavigate } from "react-router-dom";
  const initials = (name = "") =>
    name
      .trim()
@@ -52,6 +52,25 @@ const Task = () => {
  const [myTasks, setMyTasks] = useState([]);              // all tasks assigned to me (across projects)
  const [progressCount, setProgressCount] = useState(0);
  const [completeCount, setCompleteCount] = useState(0);
+const navigate = useNavigate(); 
+const [statusFilter, setStatusFilter] = useState("todo");  // "todo" or "complete"
+const handleStatusChange = (status) => {
+    setStatusFilter(status);
+};
+const filteredTasks = useMemo(() => {
+    return myTasks.filter((task) => {
+        const taskStatus = task.status.toLowerCase();
+        const todoPattern = /^todo,\d+$/;  // regex to match "todo, followed by a number"
+
+        if (statusFilter === "todo") {
+            // Match "todo" status or "todo,<any number>"
+            return taskStatus === "todo" || todoPattern.test(taskStatus);
+        } else if (statusFilter === "complete") {
+            return DONE.has(taskStatus);  // check if task is marked as complete
+        }
+        return false;
+    });
+}, [myTasks, statusFilter]);
 
  // Live calendar month (current)
  const [calMonth, setCalMonth] = useState(() => new Date());
@@ -78,80 +97,117 @@ const Task = () => {
     }, [user?._id]);
 
     // details for selected project (members) + its tasks → transform into bars
-    useEffect(() => {
-      if (!selectedProjectId) return;
-      let cancelled = false;
-      (async () => {
-        try {
-          setLoading(true); setErr("");
-          const [rp, rt] = await Promise.all([
-            fetch(`${API_BASE}/projects/${selectedProjectId}`),
-            fetch(`${API_BASE}/tasks?project_id=${selectedProjectId}`)
-          ]);
-          const proj = await rp.json();  if (!rp.ok) throw new Error(proj.error || `Project ${rp.status}`);
-          const rawTasks = await rt.json(); if (!rt.ok) throw new Error(rawTasks.error || `Tasks ${rt.status}`);
+useEffect(() => {
+  if (!selectedProjectId) return; // Exit if no project selected
 
-          const m = {};
-          for (const mem of (proj.members || [])) m[mem._id] = mem; // name, email, position
-          if (cancelled) return;
-          setMembersById(m);
+  let cancelled = false; // To avoid updating the state if the component is unmounted
 
-          // Build this-week bars to fit your existing width/margin math (6..12 slots)
-          // Normalize payload shape
-         const list = Array.isArray(rawTasks)
-            ? rawTasks
-            : (Array.isArray(rawTasks?.tasks) ? rawTasks.tasks : []);
+  (async () => {
+    try {
+      setLoading(true);
+      setErr("");  // Reset error state
 
-          // Map ALL tasks into this week's strip, clamping to Tue→Mon
-          const weekStart = startOfTuesdayWeek(new Date());
-          const weekEnd = addDays(weekStart, 6);
+      // Fetch project details and tasks in parallel
+      const [rp, rt] = await Promise.all([
+        fetch(`${API_BASE}/projects/${selectedProjectId}`),
+        fetch(`${API_BASE}/tasks?project_id=${selectedProjectId}`) // Fetch tasks for the selected project
+      ]);
 
-        const computed = list
-            .filter(t => t.title)
-            .map(t => {
-              const s0 = t.start_at || t.created_at || new Date().toISOString();
-              const e0 = t.end_at   || t.start_at   || s0;
-              const s  = new Date(s0);
-              const e  = new Date(e0);
+      // Parse project data
+      const proj = await rp.json();
+      if (!rp.ok) throw new Error(proj.error || `Project fetch failed with status: ${rp.status}`);
 
-              // Clamp to current Tue→Mon, but measure inclusively:
-              const cs = s < weekStart ? weekStart : s;
-              const ce = e > weekEnd   ? weekEnd   : e;
-              const si = clamp(daysBetween(startOfDay(cs), weekStart), 0, 6); // 0..6
-              const ei = clamp(daysBetween(endOfDay(ce),   weekStart), 0, 6); // 0..6 (inclusive)
+      // Parse tasks data
+      const rawTasks = await rt.json();
+      if (!rt.ok) throw new Error(rawTasks.error || `Tasks fetch failed with status: ${rt.status}`);
 
-              const startIndex = si;         // inclusive
-              const endIndex   = ei + 1;     // exclusive → ensures multi-day bars stretch
-              const assignee   = m[t.assignee_id] || membersById[t.assignee_id] || {};
+      console.log("Fetched tasks:", rawTasks);  // Check what tasks are returned
 
-              return {
-                _id: t._id,
-                name: t.title,
-                user: assignee.name || assignee.email || "Member",
-                color: colorFor(t.assignee_id),
-                // precompute exact pixels so the JSX stays clean
-                startPx: startIndex * SLOT_PX,
-                widthPx: Math.max((endIndex - startIndex) * SLOT_PX, SLOT_PX), // at least 1 day wide
-              };
-            });
-          if (!cancelled) setBars(computed);
-        } catch (e) {
-          if (!cancelled) { setErr(e.message || "Failed to load tasks"); setBars([]); }
-        } finally {
-          if (!cancelled) setLoading(false);
-        }
-      })();
-      return () => { cancelled = true; };
-    }, [selectedProjectId]);
+      // Create a mapping of members by their ID (to easily fetch member details)
+      const membersMap = {};
+      proj.members?.forEach((member) => {
+        membersMap[member._id] = member;
+      });
+
+      if (cancelled) return; // If the effect was cancelled, do not update the state
+
+      setMembersById(membersMap); // Update members state
+
+      // Normalize tasks (ensure it's an array of tasks)
+      const taskList = Array.isArray(rawTasks) ? rawTasks : (Array.isArray(rawTasks?.tasks) ? rawTasks.tasks : []);
+
+      // Map tasks into bars for the calendar view
+      const weekStart = startOfTuesdayWeek(new Date());
+      const weekEnd = addDays(weekStart, 6);  // End of the week (Monday)
+
+      // Compute the task bars (week view)
+      const computedBars = taskList
+        .filter(t => t.title) // Only include tasks with a title
+        .map((task) => {
+          const start = new Date(task.start_at || task.created_at || new Date().toISOString());
+          const end = new Date(task.end_at || task.start_at || start);
+
+          // Clamp task's start and end to the current week's Tuesday-Monday
+          const clampedStart = start < weekStart ? weekStart : start;
+          const clampedEnd = end > weekEnd ? weekEnd : end;
+
+          const startIndex = clamp(daysBetween(startOfDay(clampedStart), weekStart), 0, 6);
+          const endIndex = clamp(daysBetween(endOfDay(clampedEnd), weekStart), 0, 6) + 1; // Exclusive
+
+          const assignee = membersMap[task.assignee_id] || membersById[task.assignee_id] || {};
+
+          return {
+            _id: task._id,
+            name: task.title,
+            user: assignee.name || assignee.email || "Member",
+            color: colorFor(task.assignee_id),
+            startPx: startIndex * SLOT_PX,
+            widthPx: Math.max((endIndex - startIndex) * SLOT_PX, SLOT_PX),
+          };
+        });
+
+      console.log("Computed task bars:", computedBars);  // Log the computed bars to verify they include both tasks
+
+      if (!cancelled) {
+        setBars(computedBars); // Update task bars state
+      }
+
+    } catch (e) {
+      if (!cancelled) {
+        setErr(e.message || "Failed to load tasks");
+        setBars([]);  // Reset tasks state if fetching fails
+        setLoading(false);  // End loading state
+      }
+    } finally {
+      if (!cancelled) setLoading(false); // End loading state
+    }
+  })();
+
+  return () => { cancelled = true; }; // Cleanup to prevent state updates after component unmounts
+}, [selectedProjectId]); // Only re-run when the selectedProjectId changes
+
+ // Load tasks (the logic you already have)
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        const r = await fetch(`${API_BASE}/tasks?assignee_id=${user._id}`);
+        const data = await r.json();
+        setMyTasks(data.tasks || []);
+      } catch (e) {
+        setMyTasks([]);
+      }
+    };
+
+    fetchTasks();
+  }, [user?._id]);
+ const handleTaskClick = (taskId) => {
+    // Navigate to task detail page with the taskId
+    navigate(`/task-detail/${taskId}`);
+  };
 
     // dynamic week header (still Tue→Mon like your design)
     const weekStart = useMemo(() => startOfTuesdayWeek(new Date()), []);
-    const dayCells = useMemo(() =>
-      Array.from({length: 7}, (_,i) => {
-        const d = addDays(weekStart, i);
-        return { label: d.toLocaleString("en-US",{weekday:"short"}), num: d.getDate() };
-      }), [weekStart]
-    );
+    
     // helpers for status grouping (declare BEFORE using them)
 
 const todoTasksAll = useMemo(
@@ -263,18 +319,32 @@ const deadlineDays = useMemo(() => {
         <div className="mb-2 text-sm text-gray-600">
   {weekStart.toLocaleString("en-US", { month: "long" })} {weekStart.getFullYear()}
  </div>
-       <div className="flex space-x-6 items-center mb-4 justify-center">
-   {dayCells.map((d, index) => (
-     <div
-       key={index}
-       className={`text-center ${index === 4 ? "text-white rounded-full px-3 py-1" : "text-gray-600"}`}
-       style={index === 4 ? { backgroundColor: customColor } : {}}
-     >
-       <div className="text-sm font-semibold">{d.num}</div>
-       <div className="text-xs">{d.label}</div>
-     </div>
-   ))}
- </div> 
+   <div className="flex items-center justify-between p-4 w-full max-w-4xl">
+      {/* Left Section: Order, Agent, Task */}
+      <div className="flex flex-col">
+        <div className="text-lg font-semibold text-gray-800 mb-2">Order 1</div>
+        <div className="text-sm text-gray-500 mb-1">
+          <p>Agent: <span className="font-semibold">Sample Agent</span></p>
+          <p>Task: <span className="font-semibold">Buy Property</span></p>
+        </div>
+      </div>
+
+      {/* Middle Section: Progress Bar */}
+      <div className="flex flex-col items-center justify-center">
+        <div className="text-sm text-gray-500 mb-2">Complete</div>
+        <div className="w-32 bg-gray-200 rounded-full h-2 mb-2">
+          <div className="bg-red-400 h-2 rounded-full" style={{ width: "45%" }}></div>
+        </div>
+        <div className="text-sm text-gray-500">45%</div>
+      </div>
+
+      {/* Right Section: Expected Completion */}
+      <div className="flex flex-col items-end">
+        <div className="text-sm text-gray-500">Expected Completion</div>
+        <div className="text-lg font-semibold text-gray-800">Oct 12, 2019</div>
+        <div className="text-xs text-gray-400">15 Days</div>
+      </div>
+    </div>
 
        <div className="flex justify-center w-full mt-9">
    <div className="relative w-2/3">
@@ -333,63 +403,52 @@ const deadlineDays = useMemo(() => {
         </div>
 
         <div className="grid grid-cols-2 gap-2 mb-6">
-          
-          <div className="bg-sky-400 text-white text-center py-2 rounded-xl text-sm">
-            <div className="font-bold text-lg">{progressCount}</div>
-            <div>Progress</div>
-          </div>
-          <div className="bg-indigo-500 text-white text-center py-2 rounded-xl text-sm">
-            <div className="font-bold text-lg">{completeCount}</div>
-            <div>Complete</div>
-          </div>
-        </div>
- <div className="space-y-4 mb-6 max-h-72 overflow-auto pr-1">
- {/* To-do — ALL */}
- {todoTasksAll.length === 0 ? (
-   <div className="text-sm text-gray-500 text-center">No to-do tasks</div>
- ) : (
-   todoTasksAll.map((t) => (
-      <div key={t._id} className="flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <div className={`w-5 h-5 ${colorFor(t.assignee_id)} rounded-full`} />
-          <div>
-            <div className="text-sm font-semibold">{t.title}</div>
-            {t.start_at && (
-              <div className="text-xs text-gray-400">
-                Started: {new Date(t.start_at).toLocaleDateString(undefined, { day:"2-digit", month:"short" })}
-              </div>
-            )}
-          </div>
-        </div>
-        <FaChevronRight className="text-gray-400 text-xs" />
-      </div>
-    ))
-  )}
-
-  {/* Completed — ALL */}
-  {completedTasksAll.length === 0 ? (
-    <div className="text-sm text-gray-500 text-center">No completed tasks</div>
-  ) : (
-    completedTasksAll.map((t) => {
-      const dateTxt = t.end_at
-        ? new Date(t.end_at).toLocaleDateString(undefined, { day:"2-digit", month:"short" })
-        : (t.updated_at ? new Date(t.updated_at).toLocaleDateString(undefined, { day:"2-digit", month:"short" }) : "");
-      return (
-        <div key={t._id} className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className={`w-5 h-5 ${colorFor(t.assignee_id)} rounded-full`} />
-            <div>
-              <div className="text-sm font-semibold">{t.title}</div>
-              {dateTxt && <div className="text-xs text-gray-400">Completed: {dateTxt}</div>}
-            </div>
-          </div>
-          <FaChevronRight className="text-gray-400 text-xs" />
-        </div>
-      );
-    })
-  )}
+    <div
+        className={`bg-sky-400 text-white text-center py-2 rounded-xl text-sm ${statusFilter === "todo" ? "bg-opacity-80" : ""}`}
+        onClick={() => handleStatusChange("todo")}
+    >
+        <div className="font-bold text-lg">{progressCount}</div>
+        <div>Progress</div>
+    </div>
+    <div
+        className={`bg-indigo-500 text-white text-center py-2 rounded-xl text-sm ${statusFilter === "complete" ? "bg-opacity-80" : ""}`}
+        onClick={() => handleStatusChange("complete")}
+    >
+        <div className="font-bold text-lg">{completeCount}</div>
+        <div>Complete</div>
+    </div>
 </div>
- 
+
+<div className="space-y-4 mb-6 max-h-72 overflow-auto pr-1">
+    {/* Render tasks based on status */}
+    {filteredTasks.length === 0 ? (
+        <div className="text-sm text-gray-500 text-center">
+            {statusFilter === "todo" ? "No to-do tasks" : "No completed tasks"}
+        </div>
+    ) : (
+        filteredTasks.map((task) => (
+            <div
+                key={task._id}
+                className="flex items-center justify-between cursor-pointer"
+                onClick={() => handleTaskClick(task._id)} // Click handler for task
+            >
+                <div className="flex items-center space-x-2">
+                    <div className={`w-5 h-5 ${colorFor(task.assignee_id)} rounded-full`} />
+                    <div>
+                        <div className="text-sm font-semibold">{task.title}</div>
+                        {task.start_at && (
+                            <div className="text-xs text-gray-400">
+                                Started: {new Date(task.start_at).toLocaleDateString(undefined, { day: "2-digit", month: "short" })}
+                            </div>
+                        )}
+                    </div>
+                </div>
+                <FaChevronRight className="text-gray-400 text-xs" />
+            </div>
+        ))
+    )}
+</div>
+
         
 {/* Active, live calendar (current month) */}
    <div style={{ backgroundColor: customColor }} className="rounded-xl p-4 text-white">
