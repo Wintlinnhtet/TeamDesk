@@ -18,7 +18,7 @@ const Dashboard = () => {
   const formattedDate = currentDate.toLocaleDateString();
   return (
     <div className="ml-5 w-full">
-      <h1 className="text-xl font-semibold text-black mt-2">Hi, Kim Namjoon</h1>
+      <h1 className="text-xl font-semibold text-black mt-2">Hi, Admin Name</h1>
       <p className="text-sm" style={{ color: customColor }}>Let's finish your task today!</p>
 
       <div className="flex">
@@ -33,9 +33,9 @@ const Dashboard = () => {
               <button
         className="mt-4 text-white px-4 py-2 rounded-lg shadow-md"
         style={{ backgroundColor: customColor }}
-        onClick={() => navigate("/assign-task")}
+        onClick={() => navigate("/project-create")}
       >
-        Today's Assign Teams
+        Create Project
       </button>
   
             </div>

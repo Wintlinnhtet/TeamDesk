@@ -3,6 +3,7 @@ import React from "react";
  import { useEffect, useMemo, useState } from "react";
  import { API_BASE } from "../config";
 import { useParams, useNavigate } from "react-router-dom";
+import useRealtime from "../hooks/useRealtime";
  const initials = (name = "") =>
    name
      .trim()
@@ -71,6 +72,56 @@ const filteredTasks = useMemo(() => {
         return false;
     });
 }, [myTasks, statusFilter]);
+ // realtime
+ const sockRef = useRealtime(selectedProjectId, {
+   onCreated: (t) => {
+     // if it's for this project, update the bars immediately
+     if (t.project_id === selectedProjectId) {
+      setBars(prev => {
+         // compute a single bar for this new task
+         const weekStart = startOfTuesdayWeek(new Date());
+         const weekEnd   = addDays(weekStart, 6);
+         const start = new Date(t.start_at || t.created_at || new Date().toISOString());
+         const end   = new Date(t.end_at || t.start_at || start);
+         const clampedStart = start < weekStart ? weekStart : start;
+         const clampedEnd   = end   > weekEnd   ? weekEnd   : end;
+         const startIndex = clamp(daysBetween(startOfDay(clampedStart), weekStart), 0, 6);
+         const endIndex   = clamp(daysBetween(endOfDay(clampedEnd),   weekStart), 0, 6) + 1;
+         const assignee = membersById[t.assignee_id] || {};
+         const bar = {
+           _id: t._id,
+           name: t.title,
+           user: assignee.name || assignee.email || "Member",
+           color: colorFor(t.assignee_id),
+           startPx: startIndex * SLOT_PX,
+           widthPx: Math.max((endIndex - startIndex) * SLOT_PX, SLOT_PX),
+         };
+         // avoid duplicates
+         return prev.some(b => b._id === bar._id) ? prev : [...prev, bar];
+       });
+     }
+     // if this user is the assignee, reflect it in myTasks
+     if (t.assignee_id === user?._id) {
+       setMyTasks(prev => prev.some(x => x._id === t._id) ? prev : [t, ...prev]);
+       const done = (t.status || "").toLowerCase() === "completed";
+       setCompleteCount(c => c + (done ? 1 : 0));
+       setProgressCount(c => c + (done ? 0 : 1));
+     }
+   },
+   onUpdated: (patch) => {
+     // patch bars
+     setBars(prev => prev.map(b => b._id === patch._id
+       ? { ...b, name: patch.title ?? b.name }
+       : b
+     ));
+     // patch myTasks
+     setMyTasks(prev => prev.map(t => t._id === patch._id ? { ...t, ...patch } : t));
+   },
+   onDeleted: ({ _id, project_id }) => {
+     if (project_id === selectedProjectId) setBars(prev => prev.filter(b => b._id !== _id));
+     setMyTasks(prev => prev.filter(t => t._id !== _id));
+   }
+ });
 
  // Live calendar month (current)
  const [calMonth, setCalMonth] = useState(() => new Date());

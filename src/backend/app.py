@@ -5,12 +5,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from datetime import datetime
 import json
-
+from flask_socketio import SocketIO, emit, join_room, leave_room
 app = Flask(__name__)
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "192.168.1.9"
+SERVER_IP = "192.168.1.5"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -22,7 +22,23 @@ FRONTEND_ORIGINS = [
     f"http://{SERVER_IP}:5137",
 ]
 
+socketio = SocketIO(
+    app,
+    cors_allowed_origins=FRONTEND_ORIGINS,
+    async_mode="eventlet"  # or "gevent" if you prefer
+)
+# ---- optional: rooms (one per project) ----
+@socketio.on("join", namespace="/rt")
+def on_join(data):
+    pid = data.get("projectId")
+    if pid:
+        join_room(pid)
 
+@socketio.on("leave", namespace="/rt")
+def on_leave(data):
+    pid = data.get("projectId")
+    if pid:
+        leave_room(pid)
 CORS(
     app,
     resources={r"/*": {"origins": FRONTEND_ORIGINS}},
@@ -162,6 +178,9 @@ def signin():
             "role": user.get("role")
         }
     })
+@app.route("/users", methods=["OPTIONS"])
+def options_users():
+    return _preflight_ok()
 
 # -------------------- MEMBERS (role=member) --------------------
 @app.get("/members")
@@ -180,6 +199,45 @@ def get_members():
         return jsonify(members)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.get("/users")
+def get_users_by_ids():
+    # Accept comma-separated ObjectId strings
+    ids_param = (request.args.get("ids") or "").strip()
+    if not ids_param:
+        return jsonify([]), 200
+
+    raw_ids = [s.strip() for s in ids_param.split(",") if s.strip()]
+    oids = []
+    for s in raw_ids:
+        oid = to_object_id(s)
+        if oid:
+            oids.append(oid)
+
+    if not oids:
+        return jsonify([]), 200
+
+    # Return minimal fields only
+    cursor = users_collection.find(
+        {"_id": {"$in": oids}},
+        {"email": 1, "name": 1, "picture": 1, "avatar": 1, "avatar_url": 1, "profile": 1}
+    )
+
+    out = []
+    for u in cursor:
+        out.append({
+            "_id": str(u["_id"]),
+            "email": u.get("email", ""),
+            "name": u.get("name", ""),
+            # prefer 'picture'; fall back to common keys
+            "picture": (
+                u.get("picture")
+                or (u.get("profile") or {}).get("photo")
+                or u.get("avatar_url")
+                or u.get("avatar")
+                or ""
+            )
+        })
+    return jsonify(out), 200
 
 # -------------------- PROJECTS (GET list + POST create) --------------------
 # -------------------- PROJECTS (GET list + POST create) --------------------
@@ -218,6 +276,9 @@ def projects():
                     "leader_id": str(p.get("leader_id")) if p.get("leader_id") else None,
                     "start_at": p.get("start_at"),
                     "end_at": p.get("end_at"),
+                    # NEW: include progress/status in GET
+                    "progress": p.get("progress", "0"),
+                    "status": p.get("status", "todo"),
                 })
             return jsonify(out)
         except Exception as e:
@@ -230,8 +291,28 @@ def projects():
         description = (data.get("description") or "").strip()
         leader_id = to_object_id(data.get("leader_id"))
         member_ids = [to_object_id(x) for x in (data.get("member_ids") or []) if to_object_id(x)]
+
         if not name:
             return jsonify({"error": "Project name is required"}), 400
+
+        # --- NEW: normalize progress/status with safe defaults ---
+        # Accept number or string, clamp to 0..100, store as string for consistency
+        raw_progress = data.get("progress", "0")
+        try:
+            prog_num = int(str(raw_progress).strip())
+        except Exception:
+            prog_num = 0
+        prog_num = max(0, min(100, prog_num))
+        progress = str(prog_num)
+
+        # Allow common status synonyms; default to "todo"
+        raw_status = (data.get("status") or "").strip().lower()
+        allowed = {"todo", "in_progress", "complete", "completed", "done"}
+        status = raw_status if raw_status in allowed else "todo"
+        # normalize "completed"/"done" to "complete" if you prefer a single value:
+        if status in {"completed", "done"}:
+            status = "complete"
+
         doc = {
             "name": name,
             "description": description,
@@ -240,10 +321,20 @@ def projects():
             "start_at": data.get("start_at"),
             "end_at": data.get("end_at"),
             "created_at": datetime.utcnow(),
+            # NEW: persist progress/status
+            "progress": progress,   # stored as "0".."100"
+            "status": status,       # "todo" | "in_progress" | "complete"
         }
+
         try:
             ins = projects_collection.insert_one(doc)
-            return jsonify({"message": "Project created", "project_id": str(ins.inserted_id)}), 201
+            return jsonify({
+                "message": "Project created",
+                "project_id": str(ins.inserted_id),
+                # Optional echo of stored fields
+                "progress": progress,
+                "status": status,
+            }), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
@@ -334,7 +425,7 @@ def tasks_collection_handler():
             })
         return jsonify(out), 200
 
-    # POST create
+ # ---- POST (create task) ----
     data = request.get_json() or {}
     pid = to_object_id(data.get("project_id"))
     aid = to_object_id(data.get("assignee_id"))
@@ -343,8 +434,8 @@ def tasks_collection_handler():
 
     title = (data.get("title") or "").strip()
     description = (data.get("description") or "").strip()
-    start_at = data.get("start_at")   # ISO string or None
-    end_at = data.get("end_at")       # ISO string or None
+    start_at = data.get("start_at")
+    end_at = data.get("end_at")
     created_by = to_object_id(data.get("created_by")) if data.get("created_by") else None
     project_role = (data.get("project_role") or "").strip() or None
 
@@ -370,7 +461,23 @@ def tasks_collection_handler():
         "created_at": datetime.utcnow(),
     }
     ins = tasks_collection.insert_one(doc)
-    return jsonify({"message": "Task created", "task_id": str(ins.inserted_id)}), 201
+
+    payload = {
+    "_id": str(ins.inserted_id),
+    "project_id": str(doc["project_id"]),
+    "assignee_id": str(doc["assignee_id"]),
+    "title": doc.get("title",""),
+    "description": doc.get("description",""),
+    "start_at": doc.get("start_at"),
+    "end_at": doc.get("end_at"),
+    "status": doc.get("status","todo"),
+    "project_role": doc.get("project_role"),
+    "created_by": str(doc["created_by"]) if doc.get("created_by") else None,
+    "created_at": doc["created_at"].isoformat(),
+    }
+    socketio.emit("task:created", payload, namespace="/rt", to=str(doc["project_id"]))
+    return jsonify({"message": "Task created", **payload}), 201
+        
 
 @app.route("/tasks/<task_id>", methods=["GET", "PATCH", "DELETE"])
 def task_detail(task_id):
@@ -459,7 +566,17 @@ def task_detail(task_id):
 
         # Update the task in the database
         result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
-        
+                # Build the minimal patch you applied
+        patch = {"_id": str(tid)}
+        patch.update({
+            k: (str(v) if k.endswith("_id") and v is not None else v)
+            for k, v in updates.items()
+        })
+
+        # read project_id once to address the room
+        project_id = t["project_id"]  # 't' was fetched at top of endpoint
+        socketio.emit("task:updated", patch, namespace="/rt", to=str(project_id))
+
         if result.modified_count == 0:
             return jsonify({"error": "No changes were made"}), 400
 
@@ -468,6 +585,8 @@ def task_detail(task_id):
     # Handle DELETE (delete task)
     if request.method == "DELETE":
         tasks_collection.delete_one({"_id": tid})
+        socketio.emit("task:deleted", {"_id": str(tid), "project_id": str(t["project_id"])}, namespace="/rt", to=str(t["project_id"]))
+
         return jsonify({"ok": True}), 200
 
 # -------------------- USER (read) --------------------
@@ -498,4 +617,5 @@ def get_user(user_id):
 
 # -------------------- bind to LAN --------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True, use_reloader=False)
+    socketio.run(app, host="0.0.0.0", port=5000, debug=True)
+
