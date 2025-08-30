@@ -6,57 +6,52 @@ const ProjectCreate = () => {
   const customColor = "#AA405B";
   const navigate = useNavigate();
 
-  // detect edit mode from query
   const params = new URLSearchParams(window.location.search);
-  const projectId = params.get("projectId"); // if present => edit mode
+  const projectId = params.get("projectId");
   const isEdit = Boolean(projectId);
 
-  // form state
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
   const [leaderId, setLeaderId] = useState("");
 
-  // dates & times
   const [startDate, setStartDate] = useState("");
   const [startTime, setStartTime] = useState("");
   const [endDate, setEndDate] = useState("");
   const [endTime, setEndTime] = useState("");
 
-  // members
-  const [allMembers, setAllMembers] = useState([]);           // [{_id, name, email, avatar?}]
-  const [selectedMembers, setSelectedMembers] = useState([]);  // same shape
-  const [selectedMemberId, setSelectedMemberId] = useState(""); // dropdown value
+  const [allMembers, setAllMembers] = useState([]);
+  const [selectedMembers, setSelectedMembers] = useState([]);
+  const [selectedMemberId, setSelectedMemberId] = useState("");
 
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
-  const [loadingInit, setLoadingInit] = useState(isEdit); // show skeleton while fetching edit data
+  const [loadingInit, setLoadingInit] = useState(isEdit);
 
-  // load all members (for picker)
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/members`);
+        const url = isEdit
+          ? `${API_BASE}/members?exclude_project=${encodeURIComponent(projectId)}`
+          : `${API_BASE}/members`;
+        const r = await fetch(url, { credentials: "include" });
         if (!r.ok) {
           setAllMembers([]);
-          setMsg(`Failed to load members (${r.status})`);
           return;
         }
         const data = await r.json();
         setAllMembers(Array.isArray(data) ? data : []);
       } catch {
-        setMsg("Failed to load members");
+        setAllMembers([]);
       }
     })();
-  }, []);
+  }, [API_BASE, isEdit, projectId]);
 
-  // if edit mode, load the project, then prefill fields
   useEffect(() => {
     if (!isEdit) return;
-
     (async () => {
       try {
         setLoadingInit(true);
-        const r = await fetch(`${API_BASE}/projects/${projectId}`);
+        const r = await fetch(`${API_BASE}/projects/${projectId}`, { credentials: "include" });
         if (!r.ok) {
           const t = await r.text().catch(() => "");
           setMsg(`Failed to load project (${r.status}) ${t}`);
@@ -65,12 +60,10 @@ const ProjectCreate = () => {
         }
         const p = await r.json();
 
-        // Prefill base fields
         setProjectName(p.name || "");
         setDescription(p.description || "");
         setLeaderId(p.leader_id || "");
 
-        // Dates -> split to date/time inputs
         const toParts = (iso) => {
           if (!iso) return { d: "", t: "" };
           const dt = new Date(iso);
@@ -83,7 +76,6 @@ const ProjectCreate = () => {
         setStartDate(s.d); setStartTime(s.t);
         setEndDate(e.d); setEndTime(e.t);
 
-        // Members from GET /projects/:id -> p.members: [{_id, name, email}]
         const preselected = Array.isArray(p.members)
           ? p.members.map((m) => ({
               _id: m._id,
@@ -100,20 +92,20 @@ const ProjectCreate = () => {
         setLoadingInit(false);
       }
     })();
-  }, [isEdit, projectId]);
+  }, [API_BASE, isEdit, projectId]);
 
-  // labels for dropdown
-  const memberOptions = useMemo(
-    () =>
-      allMembers.map((m) => ({
+  const memberOptions = useMemo(() => {
+    const selectedIds = new Set(selectedMembers.map((m) => m._id));
+    return (allMembers || [])
+      .filter((m) => !selectedIds.has(m._id))
+      .map((m) => ({
         _id: m._id,
         label: m.name && m.name.trim().length ? m.name : (m.email || "(no name)"),
         email: m.email || "",
         name: m.name || "",
         avatar: m.avatar || null,
-      })),
-    [allMembers]
-  );
+      }));
+  }, [allMembers, selectedMembers]);
 
   const addEmployee = () => {
     setMsg("");
@@ -126,16 +118,13 @@ const ProjectCreate = () => {
       setMsg("Selected member not found.");
       return;
     }
-    if (selectedMembers.some((m) => m._id === picked._id)) {
-      setMsg("Already added.");
-      return;
-    }
     setSelectedMembers((prev) => [...prev, picked]);
     setSelectedMemberId("");
   };
 
   const removeMember = (id) => {
     setSelectedMembers((prev) => prev.filter((m) => m._id !== id));
+    setLeaderId((prevLeader) => (prevLeader === id ? "" : prevLeader));
   };
 
   const isoCombine = (d, t) => {
@@ -179,6 +168,7 @@ const ProjectCreate = () => {
 
       const r = await fetch(url, {
         method,
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(isEdit ? payload : { ...payload, progress: "0", status: "todo" }),
       });
@@ -191,7 +181,6 @@ const ProjectCreate = () => {
         return;
       }
 
-      // If creating, try to discover the new id (several possible keys)
       if (!isEdit) {
         const created = data?.project || data?.data || data;
         const createdId =
@@ -203,19 +192,15 @@ const ProjectCreate = () => {
           created?.inserted_id?.$oid ||
           created?.upserted_id;
 
-        // Optional follow-up to ensure progress/status
         if (createdId) {
           try {
-            const patchRes = await fetch(`${API_BASE}/projects/${createdId}`, {
+            await fetch(`${API_BASE}/projects/${createdId}`, {
               method: "PATCH",
+              credentials: "include",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ progress: "0", status: "todo" }),
             });
-            // ignore errors here; it’s just a safeguard
-            await patchRes.json().catch(() => ({}));
-          } catch {
-            /* noop */
-          }
+          } catch {}
         }
       }
 
@@ -267,9 +252,9 @@ const ProjectCreate = () => {
             className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm"
           >
             <option value="">-- Select a member --</option>
-            {allMembers.map((m) => (
+            {memberOptions.map((m) => (
               <option key={m._id} value={m._id}>
-                {m.name || m.email || "(no name)"}
+                {m.label}
               </option>
             ))}
           </select>
@@ -303,7 +288,7 @@ const ProjectCreate = () => {
                 </div>
               )}
               {m.name || m.label}
-              <button onClick={() => removeMember(m._id)} className="ml-1 text-white">
+              <button onClick={() => removeMember(m._id)} className="ml-1 text-white" title="Remove">
                 &times;
               </button>
             </div>

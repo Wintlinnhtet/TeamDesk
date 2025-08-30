@@ -28,7 +28,7 @@ const LeftSideBar = () => {
   const baseItem =
     "group flex items-center space-x-3 text-lg p-3 rounded-md transition-all transform hover:scale-105 shadow-md";
 
-  const baseText = "transition-colors duration-200 group-hover:text-white";
+  const baseText = "transition-colors duration-200 ";
 
   return (
     <div className="w-64 bg-white border-r-2 border-gray-200 h-full flex flex-col p-5">

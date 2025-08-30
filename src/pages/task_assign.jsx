@@ -399,7 +399,8 @@ const TaskAssign = () => {
               Save Task
             </button>
             <button
-              onClick={finish}
+            onClick={() => navigate("/projects")}
+              
               className="px-5 py-2 rounded-lg bg-green-600 text-white"
             >
               Finish
@@ -420,12 +421,13 @@ const TaskAssign = () => {
             >
               Save Task
             </button>
-            <button
-              onClick={finish}
-              className="px-5 py-2 rounded-lg bg-green-600 text-white"
-            >
-              Finish
-            </button>
+           <button
+  onClick={() => navigate("/projects")}
+  className="px-5 py-2 rounded-lg bg-green-600 text-white"
+>
+  Finish
+</button>
+
           </div>
         )}
       </div>

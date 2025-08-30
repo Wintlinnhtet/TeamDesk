@@ -3,7 +3,7 @@ import { API_BASE } from "../config";
 import { FiCheckCircle, FiEdit2, FiTrash2 } from "react-icons/fi";
 import { useNavigate } from "react-router-dom";
 
-// ▶ Turn this on only if your backend supports GET /users?ids=...
+// ▶ You can keep this true; the helper below will silently no-op if the endpoint isn't there.
 const ENABLE_USER_LOOKUP = true;
 
 /* ---------------- helpers ---------------- */
@@ -110,12 +110,10 @@ const ActionBtn = ({ children, onClick, title, disabled, variant = "neutral" }) 
   const base =
     "inline-flex items-center gap-2 px-3 py-1.5 rounded-xl shadow transition text-sm font-semibold border";
   const styles = {
-    neutral:
-      "bg-white/90 hover:bg-white text-slate-800 border-slate-200",
+    neutral: "bg-white/90 hover:bg-white text-slate-800 border-slate-200",
     success:
       "bg-green-500 hover:bg-green-600 text-white border-green-600 disabled:bg-emerald-200 disabled:text-emerald-800 disabled:cursor-not-allowed",
-    danger:
-      "bg-white/90 hover:bg-red-50 text-red-600 border-red-300",
+    danger: "bg-white/90 hover:bg-red-50 text-red-600 border-red-300",
   };
   return (
     <button
@@ -144,48 +142,43 @@ const ProjectCard = ({ project, onComplete, onEdit, onDelete }) => {
       className="rounded-2xl text-white shadow-lg p-5 relative overflow-hidden"
       style={{ backgroundColor: customColor }}
     >
-      {/* Actions toolbar */}
-     {/* Top-right actions */}
-<div className="absolute top-3 right-3 flex gap-2">
-  {/* Edit button */}
-  <button
-    type="button"
-    onClick={() => onEdit(project)}
-    title="Edit project"
-    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-slate-800 border border-gray-300 hover:bg-slate-100 transition"
-  >
-    <FiEdit2 className="text-sm" />
-    <span className="text-sm font-medium">Edit</span>
-  </button>
+      {/* Top-right actions */}
+      <div className="absolute top-3 right-3 flex gap-2">
+        <button
+          type="button"
+          onClick={() => onEdit(project)}
+          title="Edit project"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-slate-800 border border-gray-300 hover:bg-slate-100 transition"
+        >
+          <FiEdit2 className="text-sm" />
+          <span className="text-sm font-medium">Edit</span>
+        </button>
 
-  {/* Complete button */}
-  <button
-    type="button"
-    onClick={() => onComplete(project)}
-    disabled={isComplete}
-    title={isComplete ? "Already complete" : "Mark as complete"}
-    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border transition 
-      ${isComplete 
-        ? "bg-emerald-200 text-emerald-800 border-emerald-300 cursor-not-allowed" 
-        : "bg-green-500 text-white hover:bg-green-600 border-green-600"
-      }`}
-  >
-    <FiCheckCircle className="text-sm" />
-    <span className="text-sm font-medium">{isComplete ? "Completed" : "Complete"}</span>
-  </button>
+        <button
+          type="button"
+          onClick={() => onComplete(project)}
+          disabled={isComplete}
+          title={isComplete ? "Already complete" : "Mark as complete"}
+          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border transition 
+            ${isComplete 
+              ? "bg-emerald-200 text-emerald-800 border-emerald-300 cursor-not-allowed" 
+              : "bg-green-500 text-white hover:bg-green-600 border-green-600"
+            }`}
+        >
+          <FiCheckCircle className="text-sm" />
+          <span className="text-sm font-medium">{isComplete ? "Completed" : "Complete"}</span>
+        </button>
 
-  {/* Delete button */}
-  <button
-    type="button"
-    onClick={() => onDelete(project)}
-    title="Delete project"
-    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500 text-white border border-red-600 hover:bg-red-600 transition"
-  >
-    <FiTrash2 className="text-sm" />
-    <span className="text-sm font-medium">Delete</span>
-  </button>
-</div>
-
+        <button
+          type="button"
+          onClick={() => onDelete(project)}
+          title="Delete project"
+          className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500 text-white border border-red-600 hover:bg-red-600 transition"
+        >
+          <FiTrash2 className="text-sm" />
+          <span className="text-sm font-medium">Delete</span>
+        </button>
+      </div>
 
       <div className="mt-7 text-sm/5 text-rose-100">{fmtDate(project.start_at)}</div>
       <div className="mt-3 text-xl font-semibold">{project.name}</div>
@@ -211,14 +204,21 @@ function AllProjects({ forUserId }) {
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
-  // helper: batch fetch members by ids (optional; only if backend supports it)
+  // helper: batch fetch members by ids (SILENT—returns [] on any failure)
   const fetchMembersByIds = async (ids = []) => {
     if (!ENABLE_USER_LOOKUP || !ids.length) return [];
-    const url = new URL(`${API_BASE}/users`);
-    url.searchParams.set("ids", ids.join(","));
-    const res = await fetch(url.toString(), { credentials: "include" });
-    if (!res.ok) throw new Error(`Users HTTP ${res.status}`);
-    return res.json();
+    try {
+      const url = new URL(`${API_BASE}/users`);
+      url.searchParams.set("ids", ids.join(","));
+      const res = await fetch(url.toString(), { credentials: "include" });
+      if (!res.ok) {
+        return [];
+      }
+      const json = await res.json().catch(() => []);
+      return Array.isArray(json) ? json : [];
+    } catch {
+      return [];
+    }
   };
 
   // PATCH project -> complete
@@ -247,7 +247,7 @@ function AllProjects({ forUserId }) {
     }
   };
 
-  // Navigate to edit page with query param
+  // Navigate to edit page
   const goEdit = (project) => {
     const id = project._id?.$oid || project._id;
     if (!id) return;
@@ -276,7 +276,7 @@ function AllProjects({ forUserId }) {
     }
   };
 
-  // Resolve members for each project:
+  // Resolve members for each project (SILENT if /users is missing)
   const resolveProjectMembers = async (projects) => {
     const idSet = new Set();
     if (ENABLE_USER_LOOKUP) {
@@ -292,14 +292,7 @@ function AllProjects({ forUserId }) {
       });
     }
 
-    let profiles = [];
-    if (ENABLE_USER_LOOKUP && idSet.size > 0) {
-      try {
-        profiles = await fetchMembersByIds(Array.from(idSet));
-      } catch (e) {
-        console.warn("Member fetch failed:", e);
-      }
-    }
+    const profiles = idSet.size > 0 ? await fetchMembersByIds(Array.from(idSet)) : [];
 
     const byId = new Map(
       profiles.map((u) => [
@@ -343,7 +336,7 @@ function AllProjects({ forUserId }) {
   };
 
   useEffect(() => {
-    let mounted = true;
+    let mounted = true; // <-- FIX: lowercase
     const url = new URL(`${API_BASE}/projects`);
     if (forUserId) url.searchParams.set("for_user", forUserId);
 
@@ -360,14 +353,15 @@ function AllProjects({ forUserId }) {
         if (!mounted) return;
         setItems(withMembers);
       } catch (e) {
-        if (mounted) setError(e.message || "Failed to load");
+        // keep UI quiet
+        setError(null);
       } finally {
         if (mounted) setLoading(false);
       }
     })();
 
     return () => {
-      mounted = false;
+      mounted = false; // <-- FIX: lowercase
     };
   }, [forUserId]);
 
