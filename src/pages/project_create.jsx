@@ -1,48 +1,108 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { API_BASE } from "../config"; // ensure this is set as before
-import { useNavigate } from "react-router-dom";  // <-- import navigate
+import { API_BASE } from "../config";
+import { useNavigate } from "react-router-dom";
+
 const ProjectCreate = () => {
   const customColor = "#AA405B";
+  const navigate = useNavigate();
+
+  // detect edit mode from query
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get("projectId"); // if present => edit mode
+  const isEdit = Boolean(projectId);
 
   // form state
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
   const [leaderId, setLeaderId] = useState("");
-  const navigate = useNavigate();
+
   // dates & times
-  const [startDate, setStartDate] = useState("2024-12-29");
-  const [startTime, setStartTime] = useState("21:00");
-  const [endDate, setEndDate] = useState("2024-12-31");
-  const [endTime, setEndTime] = useState("22:00");
+  const [startDate, setStartDate] = useState("");
+  const [startTime, setStartTime] = useState("");
+  const [endDate, setEndDate] = useState("");
+  const [endTime, setEndTime] = useState("");
 
   // members
   const [allMembers, setAllMembers] = useState([]);           // [{_id, name, email, avatar?}]
   const [selectedMembers, setSelectedMembers] = useState([]);  // same shape
   const [selectedMemberId, setSelectedMemberId] = useState(""); // dropdown value
-  const [msg, setMsg] = useState("");
 
+  const [msg, setMsg] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [loadingInit, setLoadingInit] = useState(isEdit); // show skeleton while fetching edit data
+
+  // load all members (for picker)
   useEffect(() => {
     (async () => {
       try {
-        console.log("Fetching members from:", `${API_BASE}/members`);
         const r = await fetch(`${API_BASE}/members`);
         if (!r.ok) {
-          const text = await r.text();
-          console.error("Members fetch failed:", r.status, text);
           setAllMembers([]);
           setMsg(`Failed to load members (${r.status})`);
           return;
         }
         const data = await r.json();
-        console.log("Members:", data);
         setAllMembers(Array.isArray(data) ? data : []);
-      } catch (e) {
-        console.error("Failed to load members", e);
+      } catch {
+        setMsg("Failed to load members");
       }
     })();
   }, []);
 
-  // labels for dropdown (show name primarily) + carry avatar if present
+  // if edit mode, load the project, then prefill fields
+  useEffect(() => {
+    if (!isEdit) return;
+
+    (async () => {
+      try {
+        setLoadingInit(true);
+        const r = await fetch(`${API_BASE}/projects/${projectId}`);
+        if (!r.ok) {
+          const t = await r.text().catch(() => "");
+          setMsg(`Failed to load project (${r.status}) ${t}`);
+          setLoadingInit(false);
+          return;
+        }
+        const p = await r.json();
+
+        // Prefill base fields
+        setProjectName(p.name || "");
+        setDescription(p.description || "");
+        setLeaderId(p.leader_id || "");
+
+        // Dates -> split to date/time inputs
+        const toParts = (iso) => {
+          if (!iso) return { d: "", t: "" };
+          const dt = new Date(iso);
+          const d = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+          const t = `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+          return { d, t };
+        };
+        const s = toParts(p.start_at);
+        const e = toParts(p.end_at);
+        setStartDate(s.d); setStartTime(s.t);
+        setEndDate(e.d); setEndTime(e.t);
+
+        // Members from GET /projects/:id -> p.members: [{_id, name, email}]
+        const preselected = Array.isArray(p.members)
+          ? p.members.map((m) => ({
+              _id: m._id,
+              name: m.name || "",
+              email: m.email || "",
+              label: m.name || m.email || "(no name)",
+              avatar: null,
+            }))
+          : [];
+        setSelectedMembers(preselected);
+      } catch (e) {
+        setMsg(`Failed to load project: ${e.message}`);
+      } finally {
+        setLoadingInit(false);
+      }
+    })();
+  }, [isEdit, projectId]);
+
+  // labels for dropdown
   const memberOptions = useMemo(
     () =>
       allMembers.map((m) => ({
@@ -71,8 +131,7 @@ const ProjectCreate = () => {
       return;
     }
     setSelectedMembers((prev) => [...prev, picked]);
-    // keep dropdown selection, or clear it:
-    setSelectedMemberId(""); // clear so user explicitly picks the next
+    setSelectedMemberId("");
   };
 
   const removeMember = (id) => {
@@ -80,14 +139,20 @@ const ProjectCreate = () => {
   };
 
   const isoCombine = (d, t) => {
-    if (!d || !t) return null;
+    if (!d && !t) return null;
+    if (!d) return null;
     const [y, mo, da] = d.split("-").map(Number);
-    const [hh, mm] = t.split(":").map(Number);
+    let hh = 0, mm = 0;
+    if (t) {
+      const parts = t.split(":").map(Number);
+      hh = parts[0] ?? 0;
+      mm = parts[1] ?? 0;
+    }
     const dt = new Date(y, mo - 1, da, hh, mm, 0);
     return dt.toISOString();
   };
 
-  const onCreate = async () => {
+  const onSave = async () => {
     setMsg("");
     if (!projectName.trim()) {
       setMsg("Project name is required.");
@@ -98,72 +163,68 @@ const ProjectCreate = () => {
       return;
     }
 
-    // Some backends expect progress as a STRING; status lowercase
     const payload = {
       name: projectName.trim(),
       description: description.trim(),
       member_ids: selectedMembers.map((m) => m._id),
-      leader_id: leaderId, // <-- Ensure leaderId is passed here
+      leader_id: leaderId || null,
       start_at: isoCombine(startDate, startTime),
       end_at: isoCombine(endDate, endTime),
-      progress: "0",        // <= STRING to maximize compatibility
-      status: "todo",
     };
 
     try {
-      const r = await fetch(`${API_BASE}/projects`, {
-        method: "POST",
+      setLoading(true);
+      const url = isEdit ? `${API_BASE}/projects/${projectId}` : `${API_BASE}/projects`;
+      const method = isEdit ? "PATCH" : "POST";
+
+      const r = await fetch(url, {
+        method,
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(isEdit ? payload : { ...payload, progress: "0", status: "todo" }),
       });
 
       const data = await r.json().catch(() => ({}));
 
       if (!r.ok) {
-        console.error("Create failed:", data);
         setMsg(data.error || `Failed (${r.status})`);
+        setLoading(false);
         return;
       }
 
-      // If create succeeded but backend ignored fields, patch them in.
-      // Try to detect the new project's id from common response shapes.
-      const created =
-        data?.project ||
-        data?.data ||
-        data;
+      // If creating, try to discover the new id (several possible keys)
+      if (!isEdit) {
+        const created = data?.project || data?.data || data;
+        const createdId =
+          created?.project_id ||
+          created?._id ||
+          created?.id ||
+          created?.inserted_id ||
+          created?.insertedId ||
+          created?.inserted_id?.$oid ||
+          created?.upserted_id;
 
-      const createdId = created?._id || created?.id;
-
-      // Only PATCH if id exists; harmless to run even if create already stored them
-      if (createdId) {
-        try {
-          const patch = await fetch(`${API_BASE}/projects/${createdId}`, {
-            method: "PATCH",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ progress: "0", status: "todo" }),
-          });
-          const patchData = await patch.json().catch(() => ({}));
-          if (!patch.ok) {
-            console.warn("Patch for progress/status did not apply:", patchData);
+        // Optional follow-up to ensure progress/status
+        if (createdId) {
+          try {
+            const patchRes = await fetch(`${API_BASE}/projects/${createdId}`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ progress: "0", status: "todo" }),
+            });
+            // ignore errors here; it’s just a safeguard
+            await patchRes.json().catch(() => ({}));
+          } catch {
+            /* noop */
           }
-        } catch (e) {
-          console.warn("Patch for progress/status failed:", e);
         }
-      } else {
-        console.warn("Could not determine created project id; skip PATCH.");
       }
 
-      setMsg(data.message || "Project created");
-      // reset (optional)
-      setProjectName("");
-      setDescription("");
-      setSelectedMembers([]);
-      setSelectedMemberId("");
-      setLeaderId("");
-      navigate("/allprojects"); 
-    } catch (e) {
-      console.error(e);
+      setMsg(isEdit ? "Project updated" : (data.message || "Project created"));
+      navigate("/allprojects");
+    } catch {
       setMsg("Server error. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -171,8 +232,12 @@ const ProjectCreate = () => {
     <div className="bg-white max-w-xl mx-auto mt-6 mb-6 p-6 rounded-2xl shadow-md border-2" style={{ borderColor: customColor }}>
       <div className="flex items-center gap-4 mb-6">
         <div>
-          <h2 className="text-xl font-semibold mb-1" style={{ color: customColor }}>Create New project</h2>
-          <p className="text-sm text-black mb-4">Set project shift for your time work.</p>
+          <h2 className="text-xl font-semibold mb-1" style={{ color: customColor }}>
+            {isEdit ? "Edit Project" : "Create New project"}
+          </h2>
+          <p className="text-sm text-black mb-4">
+            {isEdit ? "Update your project details." : "Set project shift for your time work."}
+          </p>
         </div>
         <img src="pj.png" alt="icon" className="ml-10 w-18 h-18" />
       </div>
@@ -190,13 +255,12 @@ const ProjectCreate = () => {
         />
       </div>
 
-      {/* Add Members (dropdown single-select) */}
+      {/* Add Members */}
       <div className="mb-4">
         <label className="block text-sm font-medium mb-1" style={{ color: customColor }}>
-          Add Members
+          {isEdit ? "Edit Members" : "Add Members"}
         </label>
         <div className="flex gap-2 mt-5">
-          {/* Add Members (dropdown single-select) */}
           <select
             value={selectedMemberId}
             onChange={(e) => setSelectedMemberId(e.target.value)}
@@ -210,17 +274,11 @@ const ProjectCreate = () => {
             ))}
           </select>
 
-          {allMembers.length === 0 && (
-            <div className="text-sm text-gray-500 mt-2">
-              No members found. Make sure users have <code>role: "member"</code> and CORS/IP are correct.
-            </div>
-          )}
-
           <button
             onClick={addEmployee}
             className="px-4 py-2 text-sm font-semibold rounded-lg bg-[#AA405B] text-white hover:bg-[#902E48] transition-all duration-200 shadow-md"
           >
-            + Add Employee
+            + {isEdit ? "Add Member" : "Add Employee"}
           </button>
         </div>
       </div>
@@ -329,18 +387,24 @@ const ProjectCreate = () => {
 
       {/* Buttons */}
       <div className="flex justify-between">
-        <button className="px-5 py-2 rounded-lg bg-[#E7D4D8] text-[#AA405B] font-semibold hover:bg-[#d5bfc4] transition">
+        <button
+          className="px-5 py-2 rounded-lg bg-[#E7D4D8] text-[#AA405B] font-semibold hover:bg-[#d5bfc4] transition"
+          onClick={() => navigate("/allprojects")}
+          type="button"
+        >
           Cancel
         </button>
         <button
-          onClick={onCreate}
+          onClick={onSave}
+          disabled={loading}
           className="px-5 py-2 rounded-lg bg-[#AA405B] text-white font-semibold hover:opacity-90 transition"
         >
-          Add Project
+          {loading ? (isEdit ? "Updating..." : "Creating...") : (isEdit ? "Update Project" : "Add Project")}
         </button>
       </div>
 
       {msg && <p className="mt-4 text-center text-red-600">{msg}</p>}
+      {loadingInit && <div className="mt-4 h-24 rounded-xl bg-slate-100 animate-pulse" />}
     </div>
   );
 };

@@ -1,10 +1,12 @@
 import React, { useEffect, useState } from "react";
 import { API_BASE } from "../config";
+import { FiCheckCircle, FiEdit2, FiTrash2 } from "react-icons/fi";
+import { useNavigate } from "react-router-dom";
 
 // ▶ Turn this on only if your backend supports GET /users?ids=...
 const ENABLE_USER_LOOKUP = true;
 
-// ------- helpers -------
+/* ---------------- helpers ---------------- */
 const fmtDate = (iso) => {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -15,7 +17,10 @@ const daysLeft = (endAt) => {
   if (!endAt) return null;
   const now = new Date();
   const end = new Date(endAt);
-  return Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+  const diff = Math.ceil((endDay - today) / (1000 * 60 * 60 * 24));
+  return diff < 0 ? 0 : diff;
 };
 
 const clampPct = (v) => {
@@ -32,12 +37,13 @@ const barToneFor = (pct) => {
 
 const badgeToneFor = (dleft) => {
   if (dleft == null) return { text: "—", cls: "bg-gray-100 text-gray-500" };
+  if (dleft === 0) return { text: "Due today", cls: "bg-orange-100 text-orange-700" };
   if (dleft <= 3) return { text: `${dleft} day${dleft === 1 ? "" : "s"} left`, cls: "bg-[#E7D4D8] text-[#AA405B]" };
   if (dleft <= 7) return { text: `${dleft} days left`, cls: "bg-orange-100 text-orange-700" };
   return { text: `${dleft} days left`, cls: "bg-indigo-100 text-indigo-700" };
 };
 
-// ---------- Avatar helpers ----------
+/* --------------- Avatar helpers --------------- */
 const initialFrom = ({ email = "", name = "" }) => {
   const local = (email || "").trim();
   if (local.length > 0) return local[0].toUpperCase();
@@ -79,13 +85,7 @@ const Avatars = ({ members = [], fallbackCount = 0 }) => {
     <div className="flex -space-x-2">
       {shownMembers.length > 0
         ? shownMembers.map((m, idx) => (
-            <Avatar
-              key={idx}
-              email={m.email}
-              name={m.name}
-              picture={m.picture}
-              avatar={m.avatar}
-            />
+            <Avatar key={idx} email={m.email} name={m.name} picture={m.picture} avatar={m.avatar} />
           ))
         : [...Array(Math.min(3, fallbackCount))].map((_, i) => (
             <div
@@ -105,18 +105,90 @@ const Avatars = ({ members = [], fallbackCount = 0 }) => {
   );
 };
 
-// ---- Card component ----
-const ProjectCard = ({ project }) => {
+/* ---------------- Small UI helpers ---------------- */
+const ActionBtn = ({ children, onClick, title, disabled, variant = "neutral" }) => {
+  const base =
+    "inline-flex items-center gap-2 px-3 py-1.5 rounded-xl shadow transition text-sm font-semibold border";
+  const styles = {
+    neutral:
+      "bg-white/90 hover:bg-white text-slate-800 border-slate-200",
+    success:
+      "bg-green-500 hover:bg-green-600 text-white border-green-600 disabled:bg-emerald-200 disabled:text-emerald-800 disabled:cursor-not-allowed",
+    danger:
+      "bg-white/90 hover:bg-red-50 text-red-600 border-red-300",
+  };
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={`${base} ${styles[variant]}`}
+    >
+      {children}
+    </button>
+  );
+};
+
+/* ---------------- Project Card ---------------- */
+const ProjectCard = ({ project, onComplete, onEdit, onDelete }) => {
   const pct = clampPct(project.progress);
   const dleft = daysLeft(project.end_at);
   const tones = barToneFor(pct);
   const badge = badgeToneFor(dleft);
   const customColor = "#AA405B";
+  const isComplete = (project.status || "").toLowerCase() === "complete";
 
   return (
-    <div className="rounded-2xl text-white shadow-lg p-5 relative overflow-hidden" style={{ backgroundColor: customColor }}>
-      <div className="text-sm/5 text-rose-100">{fmtDate(project.start_at)}</div>
-      <div className="mt-1 text-xl font-semibold">{project.name}</div>
+    <div
+      className="rounded-2xl text-white shadow-lg p-5 relative overflow-hidden"
+      style={{ backgroundColor: customColor }}
+    >
+      {/* Actions toolbar */}
+     {/* Top-right actions */}
+<div className="absolute top-3 right-3 flex gap-2">
+  {/* Edit button */}
+  <button
+    type="button"
+    onClick={() => onEdit(project)}
+    title="Edit project"
+    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-white text-slate-800 border border-gray-300 hover:bg-slate-100 transition"
+  >
+    <FiEdit2 className="text-sm" />
+    <span className="text-sm font-medium">Edit</span>
+  </button>
+
+  {/* Complete button */}
+  <button
+    type="button"
+    onClick={() => onComplete(project)}
+    disabled={isComplete}
+    title={isComplete ? "Already complete" : "Mark as complete"}
+    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border transition 
+      ${isComplete 
+        ? "bg-emerald-200 text-emerald-800 border-emerald-300 cursor-not-allowed" 
+        : "bg-green-500 text-white hover:bg-green-600 border-green-600"
+      }`}
+  >
+    <FiCheckCircle className="text-sm" />
+    <span className="text-sm font-medium">{isComplete ? "Completed" : "Complete"}</span>
+  </button>
+
+  {/* Delete button */}
+  <button
+    type="button"
+    onClick={() => onDelete(project)}
+    title="Delete project"
+    className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500 text-white border border-red-600 hover:bg-red-600 transition"
+  >
+    <FiTrash2 className="text-sm" />
+    <span className="text-sm font-medium">Delete</span>
+  </button>
+</div>
+
+
+      <div className="mt-7 text-sm/5 text-rose-100">{fmtDate(project.start_at)}</div>
+      <div className="mt-3 text-xl font-semibold">{project.name}</div>
 
       <div className="mt-4 text-rose-100">Progress</div>
       <div className={`mt-2 h-3 w-full rounded-full ${tones.track} relative`}>
@@ -132,11 +204,12 @@ const ProjectCard = ({ project }) => {
   );
 };
 
-// ---- Main Component ----
+/* ---------------- Main ---------------- */
 function AllProjects({ forUserId }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const navigate = useNavigate();
 
   // helper: batch fetch members by ids (optional; only if backend supports it)
   const fetchMembersByIds = async (ids = []) => {
@@ -148,12 +221,63 @@ function AllProjects({ forUserId }) {
     return res.json();
   };
 
+  // PATCH project -> complete
+  const completeProject = async (project) => {
+    const id = project._id?.$oid || project._id;
+    if (!id) return;
+    if (!window.confirm(`Mark "${project.name}" as complete?`)) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/projects/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "complete", progress: 100 }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        alert(`Failed to complete: ${res.status} ${t}`);
+        return;
+      }
+      setItems((prev) =>
+        prev.map((p) => ((p._id?.$oid || p._id) === id ? { ...p, status: "complete", progress: 100 } : p))
+      );
+    } catch (e) {
+      alert(`Failed to complete: ${e.message}`);
+    }
+  };
+
+  // Navigate to edit page with query param
+  const goEdit = (project) => {
+    const id = project._id?.$oid || project._id;
+    if (!id) return;
+    navigate(`/project-create?projectId=${encodeURIComponent(id)}`);
+  };
+
+  // DELETE project
+  const deleteProject = async (project) => {
+    const id = project._id?.$oid || project._id;
+    if (!id) return;
+    if (!window.confirm(`Delete project "${project.name}"? This cannot be undone.`)) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/projects/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        alert(`Failed to delete: ${res.status} ${t}`);
+        return;
+      }
+      setItems((prev) => prev.filter((p) => (p._id?.$oid || p._id) !== id));
+    } catch (e) {
+      alert(`Failed to delete: ${e.message}`);
+    }
+  };
+
   // Resolve members for each project:
-  // - prefer project.members (embedded)
-  // - else use member_emails (for initials)
-  // - else (optionally) hydrate by member_ids via /users if enabled
   const resolveProjectMembers = async (projects) => {
-    // Collect unresolved ids only if lookup is enabled
     const idSet = new Set();
     if (ENABLE_USER_LOOKUP) {
       projects.forEach((p) => {
@@ -177,7 +301,6 @@ function AllProjects({ forUserId }) {
       }
     }
 
-    // Build a lookup for quick mapping (prefer 'picture'; accept 'avatar'/'avatar_url')
     const byId = new Map(
       profiles.map((u) => [
         String(u._id?.$oid || u._id || ""),
@@ -190,9 +313,7 @@ function AllProjects({ forUserId }) {
       ])
     );
 
-    // Attach _membersResolved to each project
     return projects.map((p) => {
-      // 1) Embedded full members
       if (Array.isArray(p.members) && p.members.length > 0) {
         return {
           ...p,
@@ -204,14 +325,12 @@ function AllProjects({ forUserId }) {
           })),
         };
       }
-      // 2) Emails only → good enough for first-letter avatars
       if (Array.isArray(p.member_emails) && p.member_emails.length > 0) {
         return {
           ...p,
           _membersResolved: p.member_emails.map((em) => ({ email: em, name: "", picture: "", avatar: "" })),
         };
       }
-      // 3) IDs only → try lookup if enabled; else leave empty (UI will show '?' placeholders via fallbackCount)
       if (Array.isArray(p.member_ids) && p.member_ids.length > 0 && byId.size > 0) {
         const members = p.member_ids
           .map((oid) => String(typeof oid === "object" && oid?.$oid ? oid.$oid : oid))
@@ -237,7 +356,6 @@ function AllProjects({ forUserId }) {
         if (!mounted) return;
         const list = Array.isArray(data) ? data : data.projects || [];
 
-        // resolve members
         const withMembers = await resolveProjectMembers(list);
         if (!mounted) return;
         setItems(withMembers);
@@ -272,14 +390,19 @@ function AllProjects({ forUserId }) {
 
       {error && <div className="text-red-600 bg-red-50 border border-red-200 rounded-xl p-4">{error}</div>}
 
-      {empty && (
-        <div className="text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-4">No projects yet.</div>
-      )}
+      {empty && <div className="text-slate-600 bg-slate-50 border border-slate-200 rounded-xl p-4">No projects yet.</div>}
 
       {!loading && !error && items.length > 0 && (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
           {items.map((p) => (
-            <ProjectCard key={p._id?.$oid || p._id || p.name} project={p} />
+            <div key={p._id?.$oid || p._id || p.name} className="relative">
+              <ProjectCard
+                project={p}
+                onComplete={completeProject}
+                onEdit={goEdit}
+                onDelete={deleteProject}
+              />
+            </div>
           ))}
         </div>
       )}

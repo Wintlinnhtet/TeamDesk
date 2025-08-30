@@ -64,6 +64,14 @@ def _preflight_ok():
     for k, v in h.items():
         resp.headers[k] = v
     return resp
+# --- add near your other explicit preflights ---
+@app.route("/projects", methods=["OPTIONS"])
+def options_projects():
+    return _preflight_ok()
+
+@app.route("/projects/<project_id>", methods=["OPTIONS"])
+def options_project_detail(project_id):
+    return _preflight_ok()
 
 # Explicit preflight routes (some setups don't run before_request for dynamic paths reliably)
 @app.route("/tasks", methods=["OPTIONS"])
@@ -84,7 +92,24 @@ def to_object_id(id_str):
         return ObjectId(id_str)
     except Exception:
         return None
+# --- helper: jsonify-safe conversion ---
+def _str_oid(v):
+    from bson import ObjectId
+    if isinstance(v, ObjectId):
+        return str(v)
+    return v
 
+def _safe_dict(d):
+    # convert any *_id fields and lists of ids to str
+    out = {}
+    for k, v in d.items():
+        if k.endswith("_id"):
+            out[k] = _str_oid(v)
+        elif isinstance(v, list) and k.endswith("_ids"):
+            out[k] = [str(x) for x in v]
+        else:
+            out[k] = v
+    return out
 # ---------- make ALL preflights succeed ----------
 @app.before_request
 def handle_preflight():
@@ -351,24 +376,22 @@ def get_project(project_id):
         return jsonify({"error": "Project not found"}), 404
 
     member_ids = proj.get("member_ids", [])
-    
-    # Fetch tasks for the project and get the project_role for each member
+
+    # map member roles from tasks (unchanged)
     tasks = list(tasks_collection.find({"project_id": pid}))
     member_roles = {}
-
     for task in tasks:
-        assignee_id = str(task["assignee_id"])  # Assignee ID
-        project_role = task.get("project_role", "No role")  # Get project role for the task
-        member_roles[assignee_id] = project_role  # Map assignee to project role
+        assignee_id = str(task["assignee_id"])
+        project_role = task.get("project_role", "No role")
+        member_roles[assignee_id] = project_role
 
-    # Get member details from the users collection and map the role
-    members = list(users_collection.find({"_id": {"$in": [ObjectId(mid) for mid in member_ids]}}))
+    members = list(users_collection.find({"_id": {"$in": [ObjectId(mid) for mid in member_ids if mid]}}))
     members = [
         {
             "_id": str(m["_id"]),
             "name": m.get("name", ""),
             "email": m.get("email", ""),
-            "project_role": member_roles.get(str(m["_id"]), "No role assigned")  # Add role for each member
+            "project_role": member_roles.get(str(m["_id"]), "No role assigned"),
         }
         for m in members
     ]
@@ -379,10 +402,213 @@ def get_project(project_id):
         "name": proj.get("name", ""),
         "description": proj.get("description", ""),
         "leader_id": str(leader_id) if leader_id else None,
-        "members": members,  # Include members with their project roles
+        "members": members,
         "start_at": proj.get("start_at"),
-        "end_at": proj.get("end_at")
+        "end_at": proj.get("end_at"),
+        # NEW: let the editor prefill these
+        "progress": proj.get("progress", "0"),
+        "status": proj.get("status", "todo"),
     })
+
+# --- PROJECT (one) --- #
+# ---------- PROJECT (read one + patch) ----------
+@app.route("/projects/<project_id>", methods=["GET", "PATCH", "DELETE", "OPTIONS"])
+def project_detail(project_id):
+    # CORS preflight (some setups still hit per-route OPTIONS)
+    if request.method == "OPTIONS":
+        return app.make_response(("", 204))
+
+    try:
+        pid = ObjectId(project_id)
+    except Exception:
+        return jsonify({"error": "Invalid project id"}), 400
+
+    # ---------- GET: one project ----------
+    if request.method == "GET":
+        proj = projects_collection.find_one({"_id": pid})
+        if not proj:
+            return jsonify({"error": "Project not found"}), 404
+
+        return jsonify({
+            "_id": str(proj["_id"]),
+            "name": proj.get("name", ""),
+            "description": proj.get("description", ""),
+            "member_ids": [str(mid) for mid in proj.get("member_ids", [])],
+            "leader_id": str(proj.get("leader_id")) if proj.get("leader_id") else None,
+            "start_at": proj.get("start_at"),
+            "end_at": proj.get("end_at"),
+            "progress": proj.get("progress", "0"),   # keep as string for consistency
+            "status": proj.get("status", "todo"),
+        })
+
+    # ---------- PATCH: partial update ----------
+    if request.method == "PATCH":
+        data = request.get_json() or {}
+        updates = {}
+
+        # text fields
+        if "name" in data:
+            nm = (data.get("name") or "").strip()
+            if not nm:
+                return jsonify({"error": "Name cannot be empty"}), 400
+            updates["name"] = nm
+
+        if "description" in data:
+            updates["description"] = (data.get("description") or "").strip()
+
+        # dates
+        if "start_at" in data:
+            updates["start_at"] = data.get("start_at") or None
+        if "end_at" in data:
+            updates["end_at"] = data.get("end_at") or None
+
+        # leader / members
+        if "leader_id" in data:
+            lid = data.get("leader_id")
+            updates["leader_id"] = ObjectId(lid) if lid else None
+
+        if "member_ids" in data and isinstance(data.get("member_ids"), list):
+            mids = []
+            for x in data.get("member_ids", []):
+                try:
+                    mids.append(ObjectId(x))
+                except Exception:
+                    pass
+            updates["member_ids"] = mids
+
+        # progress -> stored as "0".."100"
+        if "progress" in data:
+            try:
+                prog_num = int(str(data.get("progress")).strip())
+            except Exception:
+                prog_num = 0
+            prog_num = max(0, min(100, prog_num))
+            updates["progress"] = str(prog_num)
+
+        # status normalization
+        if "status" in data:
+            raw_status = (data.get("status") or "").strip().lower()
+            allowed = {"todo", "in_progress", "complete", "completed", "done"}
+            if raw_status in {"completed", "done"}:
+                raw_status = "complete"
+            if raw_status not in allowed:
+                return jsonify({"error": "Invalid status"}), 400
+            updates["status"] = raw_status
+
+        if not updates:
+            return jsonify({"error": "No changes"}), 400
+
+        try:
+            res = projects_collection.update_one({"_id": pid}, {"$set": updates})
+            if res.matched_count == 0:
+                return jsonify({"error": "Project not found"}), 404
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+        # make response JSON-safe
+        safe_updates = {}
+        for k, v in updates.items():
+            if isinstance(v, ObjectId):
+                safe_updates[k] = str(v)
+            elif isinstance(v, list) and all(isinstance(x, ObjectId) for x in v):
+                safe_updates[k] = [str(x) for x in v]
+            else:
+                safe_updates[k] = v
+
+        return jsonify({"ok": True, "project_id": str(pid), **safe_updates}), 200
+
+    # ---------- DELETE ----------
+    if request.method == "DELETE":
+        res = projects_collection.delete_one({"_id": pid})
+        if res.deleted_count == 0:
+            return jsonify({"error": "Project not found"}), 404
+
+        # optional: cascade delete tasks for this project
+        try:
+            tasks_collection.delete_many({"project_id": pid})
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "deleted_id": str(pid)}), 200
+    
+@app.route("/projects/<project_id>", methods=["PATCH"])
+def update_project(project_id):
+    pid = to_object_id(project_id)
+    if not pid:
+        return jsonify({"error": "Invalid project id"}), 400
+
+    data = request.get_json() or {}
+    updates = {}
+
+    # Basic text fields
+    if "name" in data:
+        name = (data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "Project name is required"}), 400
+        updates["name"] = name
+
+    if "description" in data:
+        updates["description"] = (data.get("description") or "").strip()
+
+    # Dates (accept ISO strings or null)
+    if "start_at" in data:
+        updates["start_at"] = data.get("start_at") or None
+    if "end_at" in data:
+        updates["end_at"] = data.get("end_at") or None
+
+    # Leader
+    if "leader_id" in data:
+        lid = to_object_id(data.get("leader_id"))
+        updates["leader_id"] = lid
+
+    # Members
+    if "member_ids" in data:
+        mids = []
+        for x in (data.get("member_ids") or []):
+            oid = to_object_id(x)
+            if oid:
+                mids.append(oid)
+        updates["member_ids"] = mids
+
+    # Progress (store as string "0".."100" to match your POST logic)
+    if "progress" in data:
+        try:
+            pnum = int(str(data.get("progress")).strip())
+        except Exception:
+            pnum = 0
+        pnum = max(0, min(100, pnum))
+        updates["progress"] = str(pnum)
+
+    # Status
+    if "status" in data:
+        raw = (data.get("status") or "").strip().lower()
+        allowed = {"todo", "in_progress", "complete", "completed", "done"}
+        status = raw if raw in allowed else "todo"
+        if status in {"completed", "done"}:
+            status = "complete"
+        updates["status"] = status
+
+    # If nothing to change
+    if not updates:
+        return jsonify({"error": "No updatable fields provided"}), 400
+
+    updates["updated_at"] = datetime.utcnow()
+
+    res = projects_collection.update_one({"_id": pid}, {"$set": updates})
+    if res.matched_count == 0:
+        return jsonify({"error": "Project not found"}), 404
+
+    # respond with a compact echo so your UI can merge it
+    # convert ObjectId fields back to strings where relevant
+    out = {"ok": True, "project_id": project_id}
+    for k, v in updates.items():
+        if k.endswith("_id") and v is not None:
+            out[k] = str(v)
+        elif k == "member_ids" and isinstance(v, list):
+            out[k] = [str(x) for x in v]
+        else:
+            out[k] = v
+    return jsonify(out), 200
 
 # -------------------- TASKS (LIST + CREATE) --------------------
 @app.route("/tasks", methods=["GET", "POST"])

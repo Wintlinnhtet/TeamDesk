@@ -9,16 +9,27 @@ const Projects = () => {
   const [msg, setMsg] = useState("");
   const navigate = useNavigate();
 
-  // 1) Load all projects for the current user (leader or member)
+  // Helper to read current user
+  const getUser = () => {
+    try {
+      return JSON.parse(localStorage.getItem("user") || "null");
+    } catch {
+      return null;
+    }
+  };
+
+  // 1) Load projects where the logged-in user is the LEADER
   useEffect(() => {
     (async () => {
       try {
-        const user = JSON.parse(localStorage.getItem("user") || "null");
+        const user = getUser();
         if (!user?._id) {
           setMsg("Please sign in again.");
           return;
         }
-        const r = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
+
+        // 👇 Only projects the current user leads
+        const r = await fetch(`${API_BASE}/projects?leader_id=${user._id}`);
         if (!r.ok) {
           const txt = await r.text();
           setMsg(`Failed to load projects (${r.status}): ${txt}`);
@@ -28,8 +39,7 @@ const Projects = () => {
         const list = Array.isArray(data) ? data : [];
         setProjects(list);
 
-        // 2) For each project, fetch its tasks to know if it's "On progress"
-        //    (no backend changes needed)
+        // 2) For each project, fetch its tasks (to show 'On progress' and count)
         const results = await Promise.all(
           list.map(async (p) => {
             try {
@@ -54,37 +64,68 @@ const Projects = () => {
     })();
   }, []);
 
-  // Optional: Complete button handler (UI only unless you add a backend route)
-  const markComplete = async (e, projectId) => {
-    e.stopPropagation(); // don’t trigger the card’s onClick
-    // If you add a backend later (e.g., PATCH /projects/:id/complete),
-    // wire it up here. For now we just show a toast-like message.
-    alert(`(TODO) Mark project ${projectId} as complete.\nAdd a backend route to persist this.`);
+  // Complete button (optional – wire to PATCH /projects/:id if you added it)
+  const markComplete = async (e, projectId, projectName) => {
+    e.stopPropagation();
+    if (!window.confirm(`Mark "${projectName}" as complete?`)) return;
+
+    // If you've implemented PATCH /projects/<id> in your backend:
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ status: "complete", progress: 100 }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => "");
+        throw new Error(`${res.status} ${t}`);
+      }
+
+      // Optimistic local update (status/progress) if desired:
+      setProjects((prev) =>
+        prev.map((p) =>
+          p._id === projectId ? { ...p, status: "complete", progress: "100" } : p
+        )
+      );
+    } catch (err) {
+      alert(`Failed to complete project: ${err.message}`);
+    }
   };
 
+  // “Assign task” navigation helpers
   const goAssign = (e, projectId, select = false) => {
-   e.stopPropagation();
-   navigate(
-     select
-       ? `/assign-task?projectId=${projectId}&mode=select`
-       : `/assign-task?projectId=${projectId}` // sequential default
-   );
- };
+    e.stopPropagation();
+    navigate(
+      select
+        ? `/assign-task?projectId=${projectId}&mode=select`
+        : `/assign-task?projectId=${projectId}` // sequential default
+    );
+  };
+
+  const goManageTasks = (e, projectId) => {
+    e.stopPropagation();
+    navigate(`/project-tasks?projectId=${projectId}`);
+  };
+
+  const user = getUser();
 
   return (
     <div className="max-w-4xl mx-auto mt-10">
-      <h2 className="text-2xl font-bold mb-6 text-[#AA405B]">Projects</h2>
+      <h2 className="text-2xl font-bold mb-6 text-[#AA405B]">My Projects (Leader)</h2>
       {msg && <p className="text-red-500 mb-4">{msg}</p>}
 
       {projects.length === 0 ? (
         <div className="text-gray-600">
-          No projects yet for you. Create one in “Create Project” and be sure to set a Leader.
+          You don’t lead any projects yet. Create one in “Create Project” and set yourself as Leader.
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {projects.map((p) => {
             const info = stats[p._id] || { hasTasks: false, count: 0 };
             const hasTasks = info.hasTasks;
+            const isLeader = p.leader_id === user?._id; // should always be true with leader-only fetch
+
             return (
               <div
                 key={p._id}
@@ -99,8 +140,6 @@ const Projects = () => {
                     <p className="text-sm text-gray-600 mt-1">{p.description}</p>
                   </div>
 
-
-
                   {/* Status badge */}
                   {hasTasks ? (
                     <span className="px-3 py-1 text-xs rounded-full bg-green-300 text-black border border-green-300">
@@ -112,20 +151,20 @@ const Projects = () => {
                     </span>
                   )}
 
-                                    {/* Edit/Manage tasks icon */}
- <button
-   onClick={(e) => {
-     e.stopPropagation();
-     navigate(`/project-tasks?projectId=${p._id}`);
-   }}
-   className="p-2 rounded hover:bg-gray-100"
-   title="Manage tasks"
- >
-   {/* simple pencil icon (SVG) */}
-   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5 text-gray-700">
-     <path d="M3 14.25V17h2.75l8.1-8.1-2.75-2.75L3 14.25Zm12.71-7.96a.996.996 0 0 0 0-1.41l-1.59-1.59a.996.996 0 1 0-1.41 1.41l1.59 1.59c.39.39 1.02.39 1.41 0Z" />
-   </svg>
- </button>
+                  {/* Manage tasks icon (leaders only) */}
+                  {isLeader && (
+                    <button
+                      onClick={(e) => goManageTasks(e, p._id)}
+                      className="p-2 rounded hover:bg-gray-100"
+                      title="Manage tasks"
+                    >
+                      {/* pencil icon */}
+                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
+                           fill="currentColor" className="w-5 h-5 text-gray-700">
+                        <path d="M3 14.25V17h2.75l8.1-8.1-2.75-2.75L3 14.25Zm12.71-7.96a.996.996 0 0 0 0-1.41l-1.59-1.59a.996.996 0 1 0-1.41 1.41l1.59 1.59c.39.39 1.02.39 1.41 0Z" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
 
                 <p className="text-xs text-gray-500 mt-2">
@@ -133,34 +172,38 @@ const Projects = () => {
                 </p>
 
                 <div className="mt-4 flex gap-2">
-                  {/* Left: assign/continue button */}
-                   {stats[p._id]?.count > 0 ? (
-  // Project ALREADY has tasks → "Add more tasks" goes to SELECT mode
-   <button
-     onClick={(e) => goAssign(e, p._id, true)}
-     className="px-4 py-2 rounded bg-[#AA405B] text-white"
-   >
-     Add more tasks
-   </button>
- ) : (
-   // Project has NO tasks → start sequential flow (no mode param)
-   <button
-     onClick={(e) => goAssign(e, p._id)}
-     className="px-4 py-2 rounded bg-[#AA405B] text-white"
-   >
-     Make Task assign
-   </button>
- )}
+                  {/* Left: Assign/continue (leaders only) */}
+                  {isLeader && (
+                    info.count > 0 ? (
+                      // Already has tasks → add more via select mode
+                      <button
+                        onClick={(e) => goAssign(e, p._id, true)}
+                        className="px-4 py-2 rounded bg-[#AA405B] text-white"
+                      >
+                        Add more tasks
+                      </button>
+                    ) : (
+                      // No tasks yet → start sequential flow
+                      <button
+                        onClick={(e) => goAssign(e, p._id)}
+                        className="px-4 py-2 rounded bg-[#AA405B] text-white"
+                      >
+                        Make Task assign
+                      </button>
+                    )
+                  )}
 
-                  {/* Right: complete button (UI only unless backend added) */}
-                  <button
-                    onClick={(e) => markComplete(e, p._id)}
-                    className="px-3 py-2 rounded-lg text-sm border"
-                    style={{ borderColor: "#AA405B", color: "#AA405B" }}
-                    title="Mark complete (requires backend route to persist)"
-                  >
-                    Complete
-                  </button>
+                  {/* Right: complete (leaders only; requires PATCH backend to persist) */}
+                  {isLeader && (
+                    <button
+                      onClick={(e) => markComplete(e, p._id, p.name)}
+                      className="px-3 py-2 rounded-lg text-sm border"
+                      style={{ borderColor: "#AA405B", color: "#AA405B" }}
+                      title="Mark complete"
+                    >
+                      Complete
+                    </button>
+                  )}
                 </div>
               </div>
             );
