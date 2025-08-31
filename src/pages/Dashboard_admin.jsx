@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import TaskAssign from './task_assign';
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
-
+import ActivityFeed from "../components/ActivityFeed";
 const DONE = new Set(["done", "complete", "completed", "finished"]);
 const lowercase = (s) => (s || "").toLowerCase();
 
@@ -566,8 +566,11 @@ const Dashboard = () => {
             )}
           </div>
           {/* End Donut */}
+
         </div>
+        
       </div>
+       <ActivityFeed title="Recent activity" limit={8} />
     </div>
   );
 };

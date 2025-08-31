@@ -115,7 +115,128 @@ def add_cors_headers(resp):
 @app.get("/ping")
 def ping():
     return jsonify({"ok": True, "from": "flask"})
+def _actor_from_request(data=None):
+    data = data or {}
+    # Prefer explicit body fields if provided; else custom headers.
+    uid_raw  = data.get("updated_by") or data.get("actor_id") or request.headers.get("X-Actor-Id")
+    name_raw = data.get("updated_by_name") or data.get("actor_name") or request.headers.get("X-Actor-Name")
+    uid = None
+    if uid_raw:
+        try:
+            uid = ObjectId(str(uid_raw))
+        except Exception:
+            uid = None
+    # If we have uid but no name, try lookup
+    if uid and not name_raw:
+        u = users_collection.find_one({"_id": uid}, {"name": 1, "email": 1})
+        if u:
+            name_raw = u.get("name") or u.get("email")
+    return uid, (name_raw or "Someone")
 
+def log_event(doc: dict):
+    """
+    doc should include:
+      type, created_at (optional), user_id (opt), user_name (opt),
+      project_id (opt), project_name (opt), task_id (opt), task_title (opt),
+      ... any extra fields like progress_before/after, status_before/after, message
+    """
+    try:
+        d = dict(doc)
+        d.setdefault("created_at", datetime.utcnow())
+        ins = logs_collection.insert_one(d)
+        return str(ins.inserted_id)
+    except Exception:
+        return None
+
+def _safe_str_id(x):
+    try:
+        return str(x)
+    except Exception:
+        return None
+
+def _serialize_log(l):
+    return {
+        "_id": _safe_str_id(l.get("_id")),
+        "type": l.get("type"),
+        "created_at": (l.get("created_at").isoformat() if isinstance(l.get("created_at"), datetime) else l.get("created_at")),
+        "at": (l.get("created_at").isoformat() if isinstance(l.get("created_at"), datetime) else l.get("created_at")),
+        "user_id": _safe_str_id(l.get("user_id")),
+        "user_name": l.get("user_name"),
+        "project_id": _safe_str_id(l.get("project_id")),
+        "project_name": l.get("project_name"),
+        "task_id": _safe_str_id(l.get("task_id")),
+        "task_title": l.get("task_title"),
+        "message": l.get("message"),
+        "action": l.get("action"),
+        "progress_before": l.get("progress_before"),
+        "progress_after": l.get("progress_after"),
+        "status_before": l.get("status_before"),
+        "status_after": l.get("status_after"),
+        "detail": l.get("detail"),
+    }
+
+# recompute & optionally log project progress changes
+def recompute_and_store_project_progress(project_id_any, *, maybe_actor=None) -> int:
+    pid = _as_object_id(project_id_any)
+    if not pid:
+        return 0
+    pid_str = str(pid)
+
+    # fetch project name + old progress
+    proj = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1})
+    old_pct = int(proj.get("progress", 0)) if proj else 0
+    proj_name = (proj or {}).get("name", "")
+
+    or_terms = [
+        {"project_id": pid}, {"project_id": pid_str},
+        {"projectId": pid},  {"projectId": pid_str},
+        {"project._id": pid},{"project._id": pid_str},
+        {"project.id": pid}, {"project.id": pid_str},
+        {"$expr": {"$eq": [{"$toString": "$project_id"}, pid_str]}},
+        {"$expr": {"$eq": [{"$toString": "$projectId"}, pid_str]}},
+        {"$expr": {"$eq": [{"$toString": "$project._id"}, pid_str]}},
+        {"$expr": {"$eq": [{"$toString": "$project.id"}, pid_str]}},
+    ]
+
+    tasks = list(tasks_collection.find(
+        {"$or": or_terms},
+        {"status": 1, "state": 1, "progress": 1, "percent": 1, "percentage": 1,
+         "progress_pct": 1, "completion": 1, "complete_percent": 1}
+    ))
+
+    if not tasks:
+        pct = 0
+    else:
+        vals = [_coerce_pct_from_task(t) for t in tasks]
+        pct = round(sum(vals) / len(vals)) if vals else 0
+
+    pct = int(pct)
+    projects_collection.update_one(
+        {"_id": pid},
+        {"$set": {"progress": pct, "updated_at": datetime.utcnow()}}
+    )
+
+    # broadcast
+    socketio.emit(
+        "project:progress",
+        {"project_id": pid_str, "progress": pct},
+        namespace="/rt",
+        to=pid_str
+    )
+
+    # log only if changed
+    if pct != old_pct:
+        uid, uname = (maybe_actor or (None, None))
+        log_event({
+            "type": "project_progress",
+            "project_id": pid,
+            "project_name": proj_name,
+            "progress_before": old_pct,
+            "progress_after": pct,
+            "user_id": uid,
+            "user_name": uname,
+        })
+    return pct
 # -------------------- ADD MEMBER --------------------
 @app.post("/add-member")
 def add_member():

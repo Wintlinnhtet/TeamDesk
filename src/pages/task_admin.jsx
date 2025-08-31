@@ -4,7 +4,7 @@ import { API_BASE } from "../config";
 import useRealtime from "../hooks/useRealtime";
 import { useNavigate } from "react-router-dom";
 import { FaChevronDown } from "react-icons/fa";
-
+import ActivityFeed from "../components/ActivityFeed";
 // ----- helpers -----
 const initials = (name = "", email = "") => {
   const src = (name || "").trim() || (email || "").trim();
@@ -288,6 +288,7 @@ useEffect(() => {
     d ? new Date(d).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
 
   return (
+    <div className="ml-5 w-full">
     <div className="p-6 font-sans bg-white min-h-screen w-full flex">
       {/* LEFT / MAIN PANEL */}
       <div className="w-2/3 pr-4">
@@ -628,7 +629,11 @@ useEffect(() => {
             )}
           </div>
         </div>
+          
       </div>
+   
+    </div>
+      <ActivityFeed title="Recent activity" limit={8} />
     </div>
   );
 };
