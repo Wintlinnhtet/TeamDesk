@@ -2,7 +2,12 @@ import React, { useEffect, useState, useMemo } from 'react';
 import TaskAssign from './task_assign';
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
-import ActivityFeed from "../components/ActivityFeed";
+import { FiBell } from "react-icons/fi";
+
+import NotificationBell from "../components/NotificationBell";
+import Notifications from '../components/Notifications';
+NotificationBell
+
 const DONE = new Set(["done", "complete", "completed", "finished"]);
 const lowercase = (s) => (s || "").toLowerCase();
 
@@ -15,12 +20,7 @@ function Donut({ series = [], colors = [], size = 180, thickness = 18, center })
 
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
-      {/* track */}
-      <circle
-        cx={size / 2} cy={size / 2} r={r}
-        fill="none" stroke="#e5e7eb" strokeWidth={thickness}
-      />
-      {/* slices */}
+      <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke="#e5e7eb" strokeWidth={thickness} />
       <g transform={`rotate(-90 ${size/2} ${size/2})`}>
         {series.map((v, i) => {
           if (!v || total === 0) return null;
@@ -41,7 +41,6 @@ function Donut({ series = [], colors = [], size = 180, thickness = 18, center })
           return el;
         })}
       </g>
-      {/* center label */}
       {center && (
         <g>
           <text x="50%" y="46%" textAnchor="middle" fontWeight="700" fontSize="20" fill="#111827">
@@ -59,6 +58,7 @@ function Donut({ series = [], colors = [], size = 180, thickness = 18, center })
 const Dashboard = () => {
   const customColor = "#AA405B";
   const navigate = useNavigate();
+const [notifOpen, setNotifOpen] = useState(false);
 
   // live clock
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -88,53 +88,64 @@ const Dashboard = () => {
   const [projectsError, setProjectsError] = useState("");
   const [membersById, setMembersById] = useState({});
 
+  // notifications (unread count)
+  const [unreadCount, setUnreadCount] = useState(0);
   useEffect(() => {
-    const load = async () => {
-      setProjectsLoading(true);
-      setProjectsError("");
+    let mounted = true;
+
+    const getUnreadCount = async () => {
+      if (!user?._id) { setUnreadCount(0); return; }
+      try {
+        // Try a dedicated count endpoint first
+        const u1 = new URL(`${API_BASE}/notifications/unread_count`);
+        u1.searchParams.set("for_user", user._id);
+        const r1 = await fetch(u1.toString(), { credentials: "include" });
+        if (r1.ok) {
+          const j = await r1.json().catch(() => ({}));
+          if (mounted) setUnreadCount(Number(j?.count || 0));
+          return;
+        }
+      } catch {}
 
       try {
-        // 1) try filtered by user (leader OR member)
-        let url = user?._id ? `${API_BASE}/projects?for_user=${user._id}` : `${API_BASE}/projects`;
-        let r = await fetch(url);
-        let data = await r.json();
-        if (!r.ok) throw new Error(data?.error || `Failed to load projects (${r.status})`);
-        let arr = Array.isArray(data) ? data : [];
-
-        // 2) fallback to ALL projects if filtered result is empty
-        if (arr.length === 0 && user?._id) {
-          const rf = await fetch(`${API_BASE}/projects`);
-          const df = await rf.json();
-          if (rf.ok && Array.isArray(df)) arr = df;
+        // Fallback: fetch unread items and count them
+        const u2 = new URL(`${API_BASE}/notifications`);
+        u2.searchParams.set("for_user", user._id);
+        u2.searchParams.set("unread", "true");
+        const r2 = await fetch(u2.toString(), { credentials: "include" });
+        if (r2.ok) {
+          const arr = await r2.json().catch(() => []);
+          if (mounted) setUnreadCount(Array.isArray(arr) ? arr.length : 0);
+          return;
         }
+      } catch {}
 
-        // normalize progress to number
-        arr.forEach(p => { p.progress = Number.isFinite(p.progress) ? p.progress : parseInt(p.progress ?? 0, 10); });
-        setProjects(arr);
-
-        // fetch member details once (for avatars/labels in Top 3 cards)
-        const uniqIds = [...new Set(arr.flatMap(p => (p.member_ids || [])))];
-        if (uniqIds.length) {
-          const ru = await fetch(`${API_BASE}/users?ids=${encodeURIComponent(uniqIds.join(","))}`);
-          const users = await ru.json();
-          if (ru.ok && Array.isArray(users)) {
-            const map = {};
-            users.forEach(u => { map[u._id] = u; });
-            setMembersById(map);
+      try {
+        // Last fallback: fetch all and count where read is falsy
+        const u3 = new URL(`${API_BASE}/notifications`);
+        u3.searchParams.set("for_user", user._id);
+        const r3 = await fetch(u3.toString(), { credentials: "include" });
+        if (r3.ok) {
+          const arr = await r3.json().catch(() => []);
+          if (mounted) {
+            const n = Array.isArray(arr) ? arr.filter(n => !n.read && !n.seen).length : 0;
+            setUnreadCount(n);
           }
+          return;
         }
-      } catch (e) {
-        setProjects([]);
-        setProjectsError(e.message || "Failed to load projects");
-      } finally {
-        setProjectsLoading(false);
-      }
+      } catch {}
+
+      if (mounted) setUnreadCount(0);
     };
 
-    load();
+    getUnreadCount();
+
+    // optional: refresh every 60s
+    const id = setInterval(getUnreadCount, 60000);
+    return () => { mounted = false; clearInterval(id); };
   }, [user?._id]);
 
-  // helpers
+  // helpers used below
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" }) : "—";
   const daysLeft = (end_at, status, progress) => {
     const done = String(status || "").toLowerCase() === "complete" || Number(progress) >= 100;
@@ -148,10 +159,83 @@ const Dashboard = () => {
     return `${diff} days left`;
   };
   const colorForIndex = (i) => ['#7C3AED', '#3B82F6', '#F97316', '#10B981', '#EF4444'][i % 5];
-  const initials = (name = "", email = "") => {
-    const src = (name || "").trim() || (email || "").trim();
-    return src ? src[0].toUpperCase() : "?";
-  };
+  const palette = ['#3B82F6','#F59E0B','#10B981','#EF4444','#8B5CF6','#14B8A6','#A855F7','#F97316'];
+
+  // --- load projects (with fallback to /projects) ---
+  useEffect(() => {
+    let mounted = true;
+
+    const load = async () => {
+      setProjectsLoading(true);
+      setProjectsError("");
+
+      try {
+        const primaryUrl = user?._id
+          ? `${API_BASE}/projects?for_user=${encodeURIComponent(user._id)}`
+          : `${API_BASE}/projects`;
+
+        let r = await fetch(primaryUrl, { credentials: "include" });
+        let data = await r.json().catch(() => []);
+        let arr = Array.isArray(data) ? data : [];
+
+        if ((!r.ok || arr.length === 0) && user?._id) {
+          const rf = await fetch(`${API_BASE}/projects`, { credentials: "include" });
+          const df = await rf.json().catch(() => []);
+          if (rf.ok && Array.isArray(df)) arr = df;
+        }
+
+        arr.forEach(p => { p.progress = Number.isFinite(p.progress) ? p.progress : parseInt(p.progress ?? 0, 10); });
+
+        if (mounted) setProjects(arr);
+      } catch (e) {
+        if (mounted) {
+          setProjects([]);
+          setProjectsError(e.message || "Failed to load projects");
+        }
+      } finally {
+        if (mounted) setProjectsLoading(false);
+      }
+    };
+
+    load();
+    return () => { mounted = false; };
+  }, [user?._id]);
+
+  // --- load member profiles for the currently loaded projects ---
+  useEffect(() => {
+    let mounted = true;
+    const toId = (x) => (typeof x === "object" && x && x.$oid) ? x.$oid : String(x || "");
+    const ids = [...new Set(
+      projects.flatMap(p => Array.isArray(p.member_ids) ? p.member_ids.map(toId) : [])
+    )].filter(Boolean);
+
+    const fetchMembers = async () => {
+      if (ids.length === 0) {
+        if (mounted) setMembersById({});
+        return;
+      }
+      try {
+        const url = new URL(`${API_BASE}/users`);
+        url.searchParams.set("ids", ids.join(","));
+        const ru = await fetch(url.toString(), { credentials: "include" });
+        const users = await ru.json().catch(() => []);
+        if (mounted) {
+          if (ru.ok && Array.isArray(users)) {
+            const map = {};
+            users.forEach(u => { map[(u?._id?.$oid || u?._id || "").toString()] = u; });
+            setMembersById(map);
+          } else {
+            setMembersById({});
+          }
+        }
+      } catch {
+        if (mounted) setMembersById({});
+      }
+    };
+
+    fetchMembers();
+    return () => { mounted = false; };
+  }, [projects]);
 
   // Previous (completed) projects for timeline
   const prevProjects = projects
@@ -162,8 +246,7 @@ const Dashboard = () => {
   const top3Projects = useMemo(() =>
     [...projects]
       .sort((a, b) =>
-        new Date(b.end_at || b.updated_at || b.created_at || 0) -
-        new Date(a.end_at || a.updated_at || a.created_at || 0)
+        new Date(b.end_at || b.updated_at || b.created_at || 0) - new Date(a.end_at || a.updated_at || a.created_at || 0)
       )
       .slice(0, 3)
   , [projects]);
@@ -174,28 +257,30 @@ const Dashboard = () => {
   const [workloadError, setWorkloadError] = useState("");
 
   useEffect(() => {
+    let mounted = true;
+
     const aggregateFromTasks = async (tasks) => {
-      // open ≈ status NOT in DONE
       const open = tasks.filter(t => !DONE.has(lowercase(t.status)));
-      const counts = new Map(); // assignee_id -> count
+      const counts = new Map();
       for (const t of open) {
         const key = t.assignee_id || "UNASSIGNED";
         counts.set(key, (counts.get(key) || 0) + 1);
       }
 
-      // label buckets → fetch missing users
       const missing = [...counts.keys()]
         .filter(id => id !== "UNASSIGNED")
         .filter(id => !membersById[id]);
 
       if (missing.length) {
         try {
-          const ru = await fetch(`${API_BASE}/users?ids=${encodeURIComponent(missing.join(","))}`);
-          const users = await ru.json();
+          const url = new URL(`${API_BASE}/users`);
+          url.searchParams.set("ids", missing.join(","));
+          const ru = await fetch(url.toString(), { credentials: "include" });
+          const users = await ru.json().catch(() => []);
           if (ru.ok && Array.isArray(users)) {
             const map = { ...membersById };
-            users.forEach(u => { map[u._id] = u; });
-            setMembersById(map);
+            users.forEach(u => { map[(u?._id?.$oid || u?._id || "").toString()] = u; });
+            if (mounted) setMembersById(map);
           }
         } catch {}
       }
@@ -211,31 +296,17 @@ const Dashboard = () => {
       });
 
       rows.sort((a,b) => b.count - a.count);
-      setWorkload(rows);
+      if (mounted) setWorkload(rows);
     };
 
     const loadWorkload = async () => {
       setWorkloadLoading(true);
       setWorkloadError("");
 
-      // A: analytics endpoint if present
       try {
-        const r = await fetch(`${API_BASE}/analytics/tasks/workload?only_open=true`);
-        if (r.ok) {
-          const data = await r.json();
-          const rows = Array.isArray(data) ? data : [];
-          rows.sort((a,b) => b.count - a.count);
-          setWorkload(rows);
-          setWorkloadLoading(false);
-          return;
-        }
-      } catch {}
-
-      // B: all open tasks endpoint
-      try {
-        const r2 = await fetch(`${API_BASE}/tasks?only_open=true`);
+        const r2 = await fetch(`${API_BASE}/tasks?only_open=true`, { credentials: "include" });
         if (r2.ok) {
-          const d2 = await r2.json();
+          const d2 = await r2.json().catch(() => []);
           const list = Array.isArray(d2) ? d2 : (Array.isArray(d2?.tasks) ? d2.tasks : []);
           await aggregateFromTasks(list);
           setWorkloadLoading(false);
@@ -243,10 +314,12 @@ const Dashboard = () => {
         }
       } catch {}
 
-      // C: aggregate by project
       try {
         const results = await Promise.all(
-          projects.map(p => fetch(`${API_BASE}/tasks?project_id=${p._id}`).then(res => res.json().catch(() => [])))
+          projects.map(p =>
+            fetch(`${API_BASE}/tasks?project_id=${p._id}`, { credentials: "include" })
+              .then(res => res.json().catch(() => []))
+          )
         );
         const merged = [];
         for (const chunk of results) {
@@ -255,31 +328,25 @@ const Dashboard = () => {
         }
         await aggregateFromTasks(merged);
       } catch (e) {
-        setWorkload([]);
-        setWorkloadError("Failed to load workload data");
+        if (mounted) {
+          setWorkload([]);
+          setWorkloadError("Failed to load workload data");
+        }
       } finally {
-        setWorkloadLoading(false);
+        if (mounted) setWorkloadLoading(false);
       }
     };
 
-    if (projects.length >= 0) loadWorkload();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects, API_BASE]);
-
-  const maxCount = workload.reduce((m, r) => Math.max(m, r.count || 0), 0) || 1;
-  const palette = ['#3B82F6','#F59E0B','#10B981','#EF4444','#8B5CF6','#14B8A6','#A855F7','#F97316'];
+    loadWorkload();
+    return () => { mounted = false; };
+  }, [projects]);
 
   /* ---------------- Donut data under clock (Todo vs Complete only) ---------------- */
-  const [period, setPeriod] = useState("all"); // kept for future; default "all"
   const filteredForDonut = useMemo(() => {
     if (!projects.length) return [];
-    // all time for now
     return projects;
   }, [projects]);
 
-  // Count only two buckets:
-  // - complete: status in DONE OR progress >= 100
-  // - todo: everything else
   const statusSummary = useMemo(() => {
     let complete = 0;
     for (const p of filteredForDonut) {
@@ -288,15 +355,11 @@ const Dashboard = () => {
       if (DONE.has(s) || prog >= 100) complete++;
     }
     const total = filteredForDonut.length;
-    return {
-      todo: Math.max(0, total - complete),
-      complete
-    };
+    return { todo: Math.max(0, total - complete), complete };
   }, [filteredForDonut]);
 
   const donutSeries = [statusSummary.todo, statusSummary.complete];
-  const donutColors = ["#ec4899", "#10b981"]; // pink = Todo, green = Complete
-  const donutLabels = ["Todo", "Complete"];
+  const donutColors = ["#ec4899", "#10b981"];
   const donutTotal = donutSeries.reduce((a,b)=>a+b,0) || 0;
   const pct = (n) => donutTotal ? Math.round((n / donutTotal) * 100) : 0;
 
@@ -306,10 +369,54 @@ const Dashboard = () => {
     return Math.round(sum / filteredForDonut.length);
   }, [filteredForDonut]);
 
+  // Build robust member list for each project (works with member_ids, members, or member_emails)
+  const projectMembers = (p) => {
+    const toId = (x) => (typeof x === "object" && x && x.$oid) ? x.$oid : String(x || "");
+    if (Array.isArray(p.members) && p.members.length) {
+      return p.members.map(m => ({
+        name: m.name,
+        email: m.email,
+        picture: m.picture || m.profile?.photo || m.avatar_url || m.avatar || ""
+      }));
+    }
+    if (Array.isArray(p.member_emails) && p.member_emails.length) {
+      return p.member_emails.map(em => ({ name: "", email: em, picture: "" }));
+    }
+    if (Array.isArray(p.member_ids) && p.member_ids.length) {
+      const ids = p.member_ids.map(toId);
+      return ids
+        .map(id => membersById[id])
+        .filter(Boolean)
+        .map(u => ({
+          name: u?.name || "",
+          email: u?.email || "",
+          picture: u?.picture || u?.profile?.photo || u?.avatar_url || u?.avatar || ""
+        }));
+    }
+    return [];
+  };
+
+  const projectMemberFallbackCount = (p) => {
+    if (Array.isArray(p.members) && p.members.length) return p.members.length;
+    if (Array.isArray(p.member_emails) && p.member_emails.length) return p.member_emails.length;
+    if (Array.isArray(p.member_ids) && p.member_ids.length) return p.member_ids.length;
+    return 0;
+  };
+
   return (
     <div className="ml-5 w-full">
-      <h1 className="text-xl font-semibold text-black mt-2">Hi, {user?.name || "Admin Name"}</h1>
-      <p className="text-sm" style={{ color: customColor }}>Let's finish your task today!</p>
+      {/* Top row: greeting + bell */}
+      <div className="mt-2 mb-2 flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-black">Hi, {user?.name || "Admin Name"}</h1>
+          <p className="text-sm" style={{ color: customColor }}>Let's finish your task today!</p>
+        </div>
+        <div className="flex items-center justify-end gap-2 mb-2 relative">
+  <NotificationBell currentUserId={user?._id} onOpen={() => setNotifOpen(v => !v)} />
+  <Notifications currentUserId={user?._id} open={notifOpen} onClose={() => setNotifOpen(false)} />
+</div>
+
+      </div>
 
       <div className="flex">
         {/* LEFT COLUMN */}
@@ -349,13 +456,12 @@ const Dashboard = () => {
                   const pctVal = Math.max(0, Math.min(100, Number.isFinite(p.progress) ? p.progress : parseInt(p.progress ?? 0, 10)));
                   const done = String(p.status || "").toLowerCase() === "complete" || pctVal >= 100;
 
-                  const memberIds = Array.isArray(p.member_ids) ? p.member_ids.slice(0, 2) : [];
-                  const mA = membersById[memberIds[0]] || {};
-                  const mB = membersById[memberIds[1]] || {};
+                  const members = projectMembers(p);
+                  const totalMembers = members.length || projectMemberFallbackCount(p);
 
                   return (
                     <div
-                      key={p._id || idx}
+                      key={p._id?.$oid || p._id || `p-${idx}`}
                       className="rounded-2xl p-4 shadow-md flex flex-col justify-between h-44"
                       style={{ backgroundColor: customColor }}
                     >
@@ -374,25 +480,9 @@ const Dashboard = () => {
                       </div>
 
                       <div className="flex justify-between items-center mt-2">
-                        {/* Members */}
-                        <div className="flex -space-x-2">
-                          <div className="w-6 h-6 rounded-full border-2 border-white overflow-hidden bg-white/20 flex items-center justify-center">
-                            {mA.picture ? (
-                              <img src={mA.picture} alt={mA.name || ""} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-[10px] text-white font-bold">{initials(mA.name, mA.email)}</span>
-                            )}
-                          </div>
-                          <div className="w-6 h-6 rounded-full border-2 border-white overflow-hidden bg-white/20 flex items-center justify-center">
-                            {mB.picture ? (
-                              <img src={mB.picture} alt={mB.name || ""} className="w-full h-full object-cover" />
-                            ) : (
-                              <span className="text-[10px] text-white font-bold">{initials(mB.name, mB.email)}</span>
-                            )}
-                          </div>
+                        <div className="text-[11px] font-semibold px-2 py-1 rounded-md bg-white/20 text-white">
+                          {totalMembers} {totalMembers === 1 ? 'member' : 'members'}
                         </div>
-
-                        {/* Status pill */}
                         <span
                           className={`text-[10px] px-2 py-1 rounded-lg font-medium ${
                             done ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-600"
@@ -407,7 +497,6 @@ const Dashboard = () => {
               </div>
             )}
 
-            {/* See all projects button */}
             <div className="flex justify-center mt-5">
               <button
                 onClick={() => navigate("/allprojects")}
@@ -427,6 +516,7 @@ const Dashboard = () => {
               </h3>
             </div>
 
+            {/* ... existing workload list unchanged ... */}
             {workloadLoading ? (
               <div className="text-sm text-gray-500">Calculating workload…</div>
             ) : workloadError ? (
@@ -439,7 +529,7 @@ const Dashboard = () => {
                   const u = row.assignee_id === "UNASSIGNED" ? null : (membersById[row.assignee_id] || {});
                   const name = row.name || u?.name || row.email || (row.assignee_id === "UNASSIGNED" ? "Unassigned" : "—");
                   const email = row.email || u?.email || "";
-                  const widthPct = Math.max(6, Math.round((row.count / maxCount) * 100)); // min visual width
+                  const widthPct = Math.max(6, Math.round((row.count / (workload.reduce((m, r) => Math.max(m, r.count || 0), 0) || 1)) * 100));
                   const barColor = palette[i % palette.length];
 
                   return (
@@ -448,7 +538,7 @@ const Dashboard = () => {
                         {u?.picture
                           ? <img src={u.picture} alt="" className="w-full h-full object-cover" />
                           : <span className="text-xs font-bold text-gray-700">
-                              {initials(name, email)}
+                              {(name || email || "?").slice(0,1).toUpperCase()}
                             </span>}
                       </div>
 
@@ -547,13 +637,12 @@ const Dashboard = () => {
                   />
                 </div>
 
-                {/* legend */}
                 <div className="space-y-2">
                   {[0,1].map((i) => (
                     <div key={i} className="flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
                         <span className="inline-block w-3 h-3 rounded" style={{ backgroundColor: donutColors[i] }} />
-                        <span className="text-gray-700">{donutLabels[i]}</span>
+                        <span className="text-gray-700">{["Todo","Complete"][i]}</span>
                       </div>
                       <div className="text-gray-500">
                         <span className="font-medium mr-2">{donutSeries[i]}</span>
@@ -568,9 +657,9 @@ const Dashboard = () => {
           {/* End Donut */}
 
         </div>
-        
+
       </div>
-       <ActivityFeed title="Recent activity" limit={8} />
+
     </div>
   );
 };

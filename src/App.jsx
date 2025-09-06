@@ -18,7 +18,8 @@ import Register from './components/Register';
 import ProjectTasks from './pages/ProjectTasks';
 import TaskDetail from './pages/TaskDetail';
 import AllProjects from './pages/AllProjects';
-import ActivityFeed from './components/ActivityFeed';
+import Notifications from './components/Notifications';
+import NotificationBell from './components/NotificationBell';
 const App = () => {
   const customColor = "#AA405B";
 
@@ -48,6 +49,7 @@ const App = () => {
           <Route path="/profile" element={<Profile />} />
           <Route path="/file-sharing" element={<FileManager />} />
           <Route path="/project-tasks" element={<ProjectTasks />} />
+            <Route path="/notifications" element={<Notifications />} />
         </Route>
       </Routes>
     </BrowserRouter>

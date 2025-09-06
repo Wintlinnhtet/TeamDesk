@@ -4,7 +4,7 @@ import { API_BASE } from "../config";
 import useRealtime from "../hooks/useRealtime";
 import { useNavigate } from "react-router-dom";
 import { FaChevronDown } from "react-icons/fa";
-import ActivityFeed from "../components/ActivityFeed";
+
 // ----- helpers -----
 const initials = (name = "", email = "") => {
   const src = (name || "").trim() || (email || "").trim();
@@ -633,7 +633,7 @@ useEffect(() => {
       </div>
    
     </div>
-      <ActivityFeed title="Recent activity" limit={8} />
+     
     </div>
   );
 };

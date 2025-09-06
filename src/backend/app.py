@@ -1,12 +1,30 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from database import db
+from .database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from datetime import datetime
 import json
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import re
+# near other imports
+
+from bson import ObjectId
+# --- add at the very top of app.py ---
+import os, sys
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # .../src/backend
+PARENT_DIR = os.path.dirname(BASE_DIR)                     # .../src
+if PARENT_DIR not in sys.path:
+    sys.path.insert(0, PARENT_DIR)
+
+
+from backend.notifications import bp_notifications
+from backend.notifier import notify_admins, notify_users
+
+from backend.database import get_db
+
+
+
 
 app = Flask(__name__)
 
@@ -66,6 +84,8 @@ def _preflight_ok():
     for k, v in h.items():
         resp.headers[k] = v
     return resp
+# where you create the app and register blueprints
+app.register_blueprint(bp_notifications, url_prefix="/notifications")
 
 # --- explicit preflights ---
 @app.route("/projects", methods=["OPTIONS"])
@@ -92,6 +112,67 @@ def options_members():
 users_collection = db["users"]
 projects_collection = db["projects"]
 tasks_collection   = db["tasks"]
+notifications_collection = db.get_collection("notifications")
+logs_collection = db.get_collection("logs")
+
+def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
+    """
+    Try backend.notifier.notify_admins; if not available, write records for all admin-like users.
+    """
+    try:
+        # If your notifier module is present, prefer it.
+        notify_admins(kind=kind, title=title, body=body, data=data or {})
+        return
+    except Exception:
+        pass
+
+    # Fallback: insert a notification document for each adminish user.
+    admin_roles = ["admin", "owner", "superadmin"]
+    admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
+    now = datetime.utcnow()
+    base = {
+        "type": kind,
+        "title": title,
+        "body": body,
+        "data": data or {},
+        "created_at": now,
+        "read": False,
+    }
+    for uid in admin_ids:
+        try:
+            notifications_collection.insert_one({**base, "user_id": uid})
+        except Exception:
+            pass
+
+def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
+    """
+    Try backend.notifier.send_to_users; if not available, write records for each user.
+    """
+    try:
+        send_to_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
+        return
+    except Exception:
+        pass
+
+    now = datetime.utcnow()
+    base = {
+        "type": kind,
+        "title": title,
+        "body": body,
+        "data": data or {},
+        "created_at": now,
+        "read": False,
+    }
+    for uid in user_ids or []:
+        try:
+            uid_obj = uid if isinstance(uid, ObjectId) else ObjectId(str(uid))
+        except Exception:
+            continue
+        try:
+            notifications_collection.insert_one({**base, "user_id": uid_obj})
+        except Exception:
+            pass
+
 
 def to_object_id(id_str):
     try:
@@ -176,68 +257,7 @@ def _serialize_log(l):
     }
 
 # recompute & optionally log project progress changes
-def recompute_and_store_project_progress(project_id_any, *, maybe_actor=None) -> int:
-    pid = _as_object_id(project_id_any)
-    if not pid:
-        return 0
-    pid_str = str(pid)
 
-    # fetch project name + old progress
-    proj = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1})
-    old_pct = int(proj.get("progress", 0)) if proj else 0
-    proj_name = (proj or {}).get("name", "")
-
-    or_terms = [
-        {"project_id": pid}, {"project_id": pid_str},
-        {"projectId": pid},  {"projectId": pid_str},
-        {"project._id": pid},{"project._id": pid_str},
-        {"project.id": pid}, {"project.id": pid_str},
-        {"$expr": {"$eq": [{"$toString": "$project_id"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$projectId"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$project._id"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$project.id"}, pid_str]}},
-    ]
-
-    tasks = list(tasks_collection.find(
-        {"$or": or_terms},
-        {"status": 1, "state": 1, "progress": 1, "percent": 1, "percentage": 1,
-         "progress_pct": 1, "completion": 1, "complete_percent": 1}
-    ))
-
-    if not tasks:
-        pct = 0
-    else:
-        vals = [_coerce_pct_from_task(t) for t in tasks]
-        pct = round(sum(vals) / len(vals)) if vals else 0
-
-    pct = int(pct)
-    projects_collection.update_one(
-        {"_id": pid},
-        {"$set": {"progress": pct, "updated_at": datetime.utcnow()}}
-    )
-
-    # broadcast
-    socketio.emit(
-        "project:progress",
-        {"project_id": pid_str, "progress": pct},
-        namespace="/rt",
-        to=pid_str
-    )
-
-    # log only if changed
-    if pct != old_pct:
-        uid, uname = (maybe_actor or (None, None))
-        log_event({
-            "type": "project_progress",
-            "project_id": pid,
-            "project_name": proj_name,
-            "progress_before": old_pct,
-            "progress_after": pct,
-            "user_id": uid,
-            "user_name": uname,
-        })
-    return pct
-# -------------------- ADD MEMBER --------------------
 @app.post("/add-member")
 def add_member():
     data = request.get_json() or {}
@@ -458,12 +478,18 @@ def _coerce_pct_from_task(task: dict) -> int:
 
 def recompute_and_store_project_progress(project_id_any) -> int:
     """
-    Compute mean of task percentages for a project and persist to projects.progress.
+    Compute mean of task percentages for a project, persist to projects.progress,
+    broadcast via socket, and notify admins if the value actually changed.
     """
     pid = _as_object_id(project_id_any)
     if not pid:
         return 0
     pid_str = str(pid)
+
+    # fetch current project for name + old progress
+    proj = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1})
+    proj_name = (proj or {}).get("name", "")
+    old_pct = int((proj or {}).get("progress", 0) or 0)
 
     or_terms = [
         {"project_id": pid}, {"project_id": pid_str},
@@ -488,18 +514,46 @@ def recompute_and_store_project_progress(project_id_any) -> int:
         vals = [_coerce_pct_from_task(t) for t in tasks]
         pct = round(sum(vals) / len(vals)) if vals else 0
 
+    pct = int(max(0, min(100, pct)))
+
     projects_collection.update_one(
         {"_id": pid},
-        {"$set": {"progress": int(pct), "updated_at": datetime.utcnow()}}
+        {"$set": {"progress": pct, "updated_at": datetime.utcnow()}}
     )
 
+    # broadcast to project room
     socketio.emit(
         "project:progress",
-        {"project_id": pid_str, "progress": int(pct)},
+        {"project_id": pid_str, "progress": pct},
         namespace="/rt",
         to=pid_str
     )
-    return int(pct)
+
+    # notify admins only if this is a real change
+    if pct != old_pct:
+        uid, uname = _actor_from_request()  # best-effort
+        _notify_admins(
+            kind="project_progress_changed",
+            title=f"Project progress updated: {proj_name or pid_str}",
+            body=f"{uname} set progress to {pct}% (was {old_pct}%).",
+            data={"project_id": pid_str, "project_name": proj_name, "from": old_pct, "to": pct}
+        )
+
+        # optional: log event if you want
+        try:
+            log_event({
+                "type": "project_progress",
+                "project_id": pid,
+                "project_name": proj_name,
+                "progress_before": old_pct,
+                "progress_after": pct,
+                "user_id": uid,
+                "user_name": uname,
+            })
+        except Exception:
+            pass
+
+    return pct
 
 # -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
@@ -694,9 +748,8 @@ def projects():
 # --- PROJECT (read one + patch + delete) ---
 @app.route("/projects/<project_id>", methods=["GET", "PATCH", "DELETE"])
 def project_detail(project_id):
-    try:
-        pid = ObjectId(project_id)
-    except Exception:
+    pid = to_object_id(project_id)
+    if not pid:
         return jsonify({"error": "Invalid project id"}), 400
 
     if request.method == "GET":
@@ -704,7 +757,6 @@ def project_detail(project_id):
         if not proj:
             return jsonify({"error": "Project not found"}), 404
 
-        # Safe member lookup
         raw_member_ids = proj.get("member_ids", [])
         ids_for_query = []
         for mid in raw_member_ids:
@@ -716,14 +768,7 @@ def project_detail(project_id):
                     ids_for_query.append(oid)
 
         members = list(users_collection.find({"_id": {"$in": ids_for_query}}))
-        members = [
-            {
-                "_id": str(m["_id"]),
-                "name": m.get("name", ""),
-                "email": m.get("email", ""),
-            }
-            for m in members
-        ]
+        members = [{"_id": str(m["_id"]), "name": m.get("name",""), "email": m.get("email","")} for m in members]
 
         return jsonify({
             "_id": str(proj["_id"]),
@@ -739,10 +784,14 @@ def project_detail(project_id):
         })
 
     if request.method == "PATCH":
-        # fetch existing to compute removed members for cascade delete + to check final completion
+        # load old values first
         existing = projects_collection.find_one({"_id": pid})
         if not existing:
             return jsonify({"error": "Project not found"}), 404
+
+        old_status = (existing.get("status") or "").strip().lower()
+        old_progress = int(existing.get("progress", 0) or 0)
+
         old_member_ids = existing.get("member_ids", [])
         old_set = set(old_member_ids)
         updates = {}
@@ -808,7 +857,7 @@ def project_detail(project_id):
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-        # ---- Cascade: delete tasks of removed members
+        # Cascade: delete tasks of removed members
         if removed_member_oids:
             try:
                 removed_str = [str(x) for x in removed_member_oids]
@@ -837,18 +886,39 @@ def project_detail(project_id):
             except Exception:
                 pass
 
-        # -------- If project is now complete, write member experience ----------
-        # read the updated project to determine final status/progress
-        final_proj = projects_collection.find_one({"_id": pid}, {"status": 1, "progress": 1})
-        final_status = (final_proj or {}).get("status", "").strip().lower()
-        final_progress = int((final_proj or {}).get("progress", 0) or 0)
-        if final_status in {"complete", "completed", "done"} or final_progress >= 100:
-            try:
-                _update_users_experience_for_completed_project(pid)
-            except Exception:
-                pass
+        # Re-read final values after update
+        final = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1, "status": 1})
+        final_progress = int((final or {}).get("progress", 0) or 0)
+        final_status = (final or {}).get("status", "").strip().lower()
+        proj_name = (final or {}).get("name", "")
 
-        # make response safe
+        # Notify admins (progress change / completion)
+        try:
+            actor_id, actor_name = _actor_from_request(data)
+
+            if final_progress != old_progress:
+                notify_admins(
+                    kind="project_progress_changed",
+                    title=f"Project progress updated: {proj_name}",
+                    body=f"{actor_name} set progress to {final_progress}% (was {old_progress}%).",
+                    data={"project_id": str(pid), "project_name": proj_name, "from": old_progress, "to": final_progress},
+                )
+
+            became_complete = (
+                (old_status not in {"complete","completed","done"} and final_status in {"complete","completed","done"})
+                or (old_progress < 100 and final_progress >= 100)
+            )
+            if became_complete:
+                notify_admins(
+                    kind="project_completed",
+                    title=f"Project completed: {proj_name}",
+                    body=f"{actor_name} marked the project complete.",
+                    data={"project_id": str(pid), "project_name": proj_name},
+                )
+        except Exception:
+            pass
+
+        # Response
         out = {"ok": True, "project_id": str(pid)}
         for k, v in updates.items():
             if isinstance(v, ObjectId):
@@ -940,7 +1010,7 @@ def tasks_collection_handler():
     if aid not in proj.get("member_ids", []):
         return jsonify({"error": "Assignee must be a member of this project"}), 400
 
-    # initial task status/progress
+    # initial status/progress
     tprog = int(max(0, min(100, int(data.get("progress", 0) or 0)))) if str(data.get("progress", "")).strip().isdigit() else 0
     tstatus = "completed" if tprog == 100 else "todo"
 
@@ -975,8 +1045,33 @@ def tasks_collection_handler():
     }
     socketio.emit("task:created", payload, namespace="/rt", to=str(doc["project_id"]))
 
-    # recompute & broadcast project.progress
+    # recompute project.progress
     recompute_and_store_project_progress(pid)
+
+    # [NOTIFY] task assigned
+    try:
+        creator_id, creator_name = _actor_from_request(data)
+        assignee = users_collection.find_one({"_id": aid}, {"name": 1, "email": 1})
+        assignee_name = (assignee or {}).get("name") or (assignee or {}).get("email") or "a member"
+        proj_name = proj.get("name", "")
+
+        notify_admins(
+            kind="task_assigned",
+            title=f"Task assigned • {proj_name}",
+            body=f"{creator_name or 'Someone'} assigned '{title}' to {assignee_name}.",
+            data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
+        )
+
+        # optional: notify the assignee
+        notify_users(
+            [aid],
+            kind="you_were_assigned",
+            title=f"New task in {proj_name}",
+            body=f"You were assigned: {title}",
+            data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
+        )
+    except Exception:
+        pass
 
     return jsonify({"message": "Task created", **payload}), 201
 
@@ -1011,6 +1106,10 @@ def task_detail(task_id):
     if request.method == "PATCH":
         data = request.get_json() or {}
         updates = {}
+
+        # save previous values for notifications
+        prev_status = (t.get("status") or "").strip().lower()
+        prev_progress = int(t.get("progress") or 0)
 
         if "title" in data:
             title = (data.get("title") or "").strip()
@@ -1061,30 +1160,63 @@ def task_detail(task_id):
         updates["updated_at"] = datetime.utcnow()
 
         result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
+        if result.modified_count == 0:
+            return jsonify({"error": "No changes were made"}), 400
 
+        # Build the patch object used both for socket and to derive new values
         patch = {"_id": str(tid)}
         patch.update({
             k: (str(v) if k.endswith("_id") and v is not None else (int(v) if k == "progress" and v is not None else v))
             for k, v in updates.items()
         })
+
         project_id = t["project_id"]
+
+        # socket: task updated
         socketio.emit("task:updated", patch, namespace="/rt", to=str(project_id))
 
-        if result.modified_count == 0:
-            return jsonify({"error": "No changes were made"}), 400
-
-        # recompute & broadcast progress
+        # recompute & broadcast project progress
         recompute_and_store_project_progress(project_id)
+
+        # ---- ADMIN NOTIFY: task progress / completion (now that DB is updated) ----
+        try:
+            actor_id, actor_name = _actor_from_request(data)
+            new_status = (patch.get("status") or t.get("status") or "").strip().lower()
+            new_progress = int(patch.get("progress") if patch.get("progress") is not None else (t.get("progress") or 0))
+            proj = projects_collection.find_one({"_id": project_id}, {"name": 1})
+            proj_name = (proj or {}).get("name", "")
+            title_now = patch.get("title") or t.get("title","")
+
+            if new_progress != prev_progress:
+                notify_admins(
+                    kind="task_progress_changed",
+                    title=f"Task progress • {proj_name}",
+                    body=f"{actor_name} set '{title_now}' to {new_progress}% (was {prev_progress}%).",
+                    data={"project_id": str(project_id), "task_id": str(tid)},
+                )
+
+            just_completed = (
+                (prev_status not in {"completed","complete","done"} and new_status in {"completed","complete","done"})
+                or (prev_progress < 100 and new_progress >= 100)
+            )
+            if just_completed:
+                assignee = users_collection.find_one({"_id": t.get("assignee_id")}, {"name": 1, "email": 1})
+                assignee_label = (assignee or {}).get("name") or (assignee or {}).get("email") or str(t.get("assignee_id"))
+                notify_admins(
+                    kind="task_completed",
+                    title=f"Task completed • {proj_name}",
+                    body=f"{actor_name} marked '{title_now}' as complete. Assignee: {assignee_label}.",
+                    data={"project_id": str(project_id), "task_id": str(tid)},
+                )
+        except Exception:
+            pass
 
         return jsonify({"message": "Task updated successfully", "task": patch}), 200
 
     # DELETE
     tasks_collection.delete_one({"_id": tid})
     socketio.emit("task:deleted", {"_id": str(tid), "project_id": str(t["project_id"])}, namespace="/rt", to=str(t["project_id"]))
-
-    # recompute progress after deletion
     recompute_and_store_project_progress(t["project_id"])
-
     return jsonify({"ok": True}), 200
 
 # -------------------- USER (read) --------------------
