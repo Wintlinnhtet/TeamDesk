@@ -19,10 +19,13 @@ export default function NotificationBell({ onOpen }) {
   const [loading, setLoading] = useState(false);
   const timerRef = useRef(null);
   const uidRef = useRef(getCurrentUserId());
+  const openedRef = useRef(false); // avoid immediate re-pop after we clear
 
   const fetchCount = async () => {
     const uid = uidRef.current;
     if (!uid) return;
+    // if we just opened and cleared, skip first poll to prevent flicker
+    if (openedRef.current) return;
     try {
       setLoading(true);
       const url = `${API_BASE}/notifications/unread_count?for_user=${encodeURIComponent(uid)}`;
@@ -32,31 +35,46 @@ export default function NotificationBell({ onOpen }) {
         setCount(json.count);
       }
     } catch {
-      // ignore
+      // ignore errors silently
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchCount();                // initial
+    fetchCount(); // initial
     timerRef.current = setInterval(fetchCount, 10000); // poll every 10s
     return () => clearInterval(timerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleClick = () => {
-    onOpen?.();
-    // optional: mark all read when panel opens
+  const handleClick = async () => {
+    // Optimistically clear the badge
+    setCount(0);
+    openedRef.current = true;
+
+    // Tell backend to mark all read (fails silently if route not present)
     const uid = uidRef.current;
-    if (!uid) return;
-    fetch(`${API_BASE}/notifications/mark_all_read`, {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ for_user: uid }),
-    }).finally(() => {
-      setCount(0);
-    });
+    if (uid) {
+      try {
+        await fetch(`${API_BASE}/notifications/mark_all_read`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ for_user: uid }),
+        });
+      } catch {
+        // no-op
+      }
+    }
+
+    // Let parent open the panel
+    onOpen?.();
+
+    // allow polling again after a short delay to avoid immediate re-pop
+    setTimeout(() => {
+      openedRef.current = false;
+    }, 2000);
   };
 
   return (
@@ -65,6 +83,7 @@ export default function NotificationBell({ onOpen }) {
       onClick={handleClick}
       className="relative inline-flex items-center justify-center w-10 h-10 rounded-full hover:bg-slate-100 transition"
       title="Notifications"
+      aria-label="Notifications"
     >
       {/* Bell icon */}
       <svg viewBox="0 0 24 24" className="w-6 h-6 text-slate-700">

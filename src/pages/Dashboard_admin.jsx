@@ -411,7 +411,7 @@ const [notifOpen, setNotifOpen] = useState(false);
           <h1 className="text-xl font-semibold text-black">Hi, {user?.name || "Admin Name"}</h1>
           <p className="text-sm" style={{ color: customColor }}>Let's finish your task today!</p>
         </div>
-        <div className="flex items-center justify-end gap-2 mb-2 relative">
+        <div className="flex items-center justify-end gap-2 mb-2 mr-12 relative">
   <NotificationBell currentUserId={user?._id} onOpen={() => setNotifOpen(v => !v)} />
   <Notifications currentUserId={user?._id} open={notifOpen} onClose={() => setNotifOpen(false)} />
 </div>

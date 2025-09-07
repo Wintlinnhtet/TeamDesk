@@ -1,24 +1,52 @@
+// src/components/TaskDetail.jsx
 import React, { useEffect, useState, useMemo } from "react";
 import { FaArrowLeft, FaUserAlt, FaUsers, FaCalendarCheck, FaCheckCircle, FaLock } from "react-icons/fa";
 import { useNavigate, useParams } from "react-router-dom";
 import { API_BASE } from "../config";
 
+/** Prefer numeric progress when >0; otherwise parse from status (e.g., "todo,48", "in_progress 60%"). */
+function deriveProgress(task) {
+  const n = Number(task?.progress);
+  if (Number.isFinite(n) && n > 0) return Math.max(0, Math.min(100, n));
+
+  const s = String(task?.status || "").toLowerCase();
+  if (/completed|complete|done|finished/.test(s)) return 100;
+
+  const m = s.match(/(\d{1,3})/);
+  if (m) return Math.max(0, Math.min(100, parseInt(m[1], 10)));
+
+  return 0;
+}
+
+/** Read the current user from local/session storage for actor headers */
+function getActor() {
+  try {
+    const ls = JSON.parse(localStorage.getItem("user") || "null");
+    const ss = JSON.parse(sessionStorage.getItem("user") || "null");
+    const raw = (ls?.user || ls || ss?.user || ss || null) || {};
+    const id = raw?._id || raw?.id || null;
+    const name = raw?.name || raw?.email || "Someone";
+    return { id: id ? String(id) : null, name: String(name) };
+  } catch {
+    return { id: null, name: "Someone" };
+  }
+}
+
 const TaskDetail = () => {
   const { taskId } = useParams();
   const [taskDetail, setTaskDetail] = useState(null);
   const [projectDetail, setProjectDetail] = useState(null);
-  const [leaderDetail, setLeaderDetail] = useState(null);
+  const [leaderDetail, setLeaderDetail] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
   const navigate = useNavigate();
 
-  // lock = project completed → tasks cannot be changed
   const locked = useMemo(() => {
     if (!projectDetail) return false;
     const status = String(projectDetail.status || "").toLowerCase();
     const prog = Number(projectDetail.progress || 0);
-    return status === "complete" || prog >= 100;
+    return status === "complete"; // keep your existing rule
   }, [projectDetail]);
 
   useEffect(() => {
@@ -26,15 +54,13 @@ const TaskDetail = () => {
       if (!taskId) return;
       try {
         // 1) task
-        const taskResponse = await fetch(`${API_BASE}/tasks/${taskId}`);
-        const taskData = await taskResponse.json();
-
-        if (!taskResponse.ok) {
+        const taskRes = await fetch(`${API_BASE}/tasks/${taskId}`);
+        const taskData = await taskRes.json();
+        if (!taskRes.ok) {
           setError(taskData?.error || "Failed to fetch task");
           setLoading(false);
           return;
         }
-
         if (!taskData.project_id) {
           setError("No project_id found in task");
           setLoading(false);
@@ -42,45 +68,30 @@ const TaskDetail = () => {
         }
 
         // 2) project
-        const projectResponse = await fetch(`${API_BASE}/projects/${taskData.project_id}`);
-        const projectData = await projectResponse.json();
-        if (!projectResponse.ok) {
-          setError(projectData?.error || "Failed to fetch project");
+        const projRes = await fetch(`${API_BASE}/projects/${taskData.project_id}`);
+        const projData = await projRes.json();
+        if (!projRes.ok) {
+          setError(projData?.error || "Failed to fetch project");
           setLoading(false);
           return;
         }
 
-        // 3) leader
+        // 3) leader (optional)
         let leaderData = {};
-        if (projectData.leader_id) {
-          const leaderResponse = await fetch(`${API_BASE}/get-user/${projectData.leader_id}`);
-          leaderData = await leaderResponse.json();
-          if (!leaderResponse.ok) {
-            setError(leaderData?.error || "Failed to fetch leader details");
-            setLoading(false);
-            return;
-          }
+        if (projData.leader_id) {
+          const leaderRes = await fetch(`${API_BASE}/get-user/${projData.leader_id}`);
+          leaderData = await leaderRes.json();
+          if (!leaderRes.ok) leaderData = {};
         }
 
         setTaskDetail(taskData);
-        setProjectDetail(projectData);
+        setProjectDetail(projData);
         setLeaderDetail(leaderData);
-        setLoading(false);
 
-        // Initial progress: prefer numeric field, else parse from status, else 100 if completed
-        let init = 0;
-        if (typeof taskData.progress === "number") {
-          init = Math.max(0, Math.min(100, taskData.progress));
-        } else if (typeof taskData.status === "string") {
-          const s = taskData.status.toLowerCase();
-          if (s.startsWith("todo,")) {
-            const n = parseInt(s.split(",")[1], 10);
-            init = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
-          } else if (s === "completed" || s === "complete" || s === "done" || s === "finished") {
-            init = 100;
-          }
-        }
-        setProgress(init);
+        // initialize the slider from the DB
+        setProgress(deriveProgress(taskData));
+
+        setLoading(false);
       } catch (err) {
         console.error("Error fetching task details:", err);
         setError("Error fetching data");
@@ -91,70 +102,88 @@ const TaskDetail = () => {
     fetchTaskDetail();
   }, [taskId]);
 
+  // keep slider in sync if taskDetail changes elsewhere
+  useEffect(() => {
+    if (taskDetail) setProgress(deriveProgress(taskDetail));
+  }, [taskDetail?.status, taskDetail?.progress]);
+
   if (loading) return <div className="text-center text-lg text-gray-500">Loading...</div>;
   if (error) return <div className="text-center text-lg text-red-500">{error}</div>;
-  if (!taskDetail || !projectDetail || !leaderDetail)
-    return <div className="text-center text-lg text-gray-500">No details available</div>;
+  if (!taskDetail || !projectDetail) return <div className="text-center text-lg text-gray-500">No details available</div>;
 
-  const handleProgressChange = (e) => {
-    setProgress(parseInt(e.target.value, 10));
-  };
+  const handleProgressChange = (e) => setProgress(parseInt(e.target.value, 10));
+// 🔧 Only this function changed
+const handleSetProgress = async () => {
+  if (locked) {
+    alert("This project is completed. Task updates are locked.");
+    return;
+  }
+  const { id: actorId, name: actorName } = getActor();
+  const status = progress === 100 ? "completed" : `todo,${progress}`;
 
-  const handleSetProgress = async () => {
-    if (locked) {
-      alert("This project is completed. Task updates are locked.");
-      return;
-    }
-    // If progress reaches 100%, set completed; else keep "todo,<pct>" form
-    const status = progress === 100 ? "completed" : `todo,${progress}`;
-    try {
-      const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      const data = await response.json();
-      if (response.ok) {
-        setTaskDetail((prev) => ({ ...prev, status }));
-      } else {
-        console.error("Failed to update progress:", data);
-        alert(data?.error || "Failed to update progress");
-      }
-    } catch (err) {
-      console.error("Error updating progress:", err);
-      alert("Network error while updating progress");
-    }
-  };
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      // ✅ send actor in the BODY (no custom headers → no preflight block)
+      body: JSON.stringify({
+        status,
+        progress,
+        updated_by: actorId,
+        updated_by_name: actorName,
+      }),
+    });
 
-  const handleCompleteTask = async () => {
-    if (locked) {
-      alert("This project is completed. Task updates are locked.");
-      return;
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setTaskDetail((prev) => ({ ...prev, status, progress }));
+      setProgress(progress);
+    } else {
+      console.error("Failed to update progress:", data);
+      alert(data?.error || "Failed to update progress");
     }
-    setProgress(100);
-    try {
-      const response = await fetch(`${API_BASE}/tasks/${taskId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "completed" }),
-      });
-      const data = await response.json();
-      if (response.ok) {
-        setTaskDetail((prev) => ({ ...prev, status: "completed" }));
-      } else {
-        console.error("Failed to complete task:", data);
-        alert(data?.error || "Failed to complete task");
-      }
-    } catch (err) {
-      console.error("Error completing task:", err);
-      alert("Network error while completing task");
-    }
-  };
+  } catch (err) {
+    console.error("Error updating progress:", err);
+    alert("Network/CORS error while updating progress");
+  }
+};
+// 🔧 And this one
+const handleCompleteTask = async () => {
+  if (locked) {
+    alert("This project is completed. Task updates are locked.");
+    return;
+  }
+  const { id: actorId, name: actorName } = getActor();
 
-  const statusLabel =
-    typeof taskDetail.status === "string" && taskDetail.status.toLowerCase().startsWith("todo,")
-      ? `${taskDetail.status.split(",")[1]}% completed`
-      : taskDetail.status;
+  try {
+    const res = await fetch(`${API_BASE}/tasks/${taskId}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        status: "completed",
+        progress: 100,
+        updated_by: actorId,
+        updated_by_name: actorName,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+      setTaskDetail((prev) => ({ ...prev, status: "completed", progress: 100 }));
+      setProgress(100);
+    } else {
+      console.error("Failed to complete task:", data);
+      alert(data?.error || "Failed to complete task");
+    }
+  } catch (err) {
+    console.error("Error completing task:", err);
+    alert("Network/CORS error while completing task");
+  }
+};
+
+  const statusLabel = progress === 100 ? "completed" : `${progress}% completed`;
 
   return (
     <div className="max-w-7xl mx-auto p-6 bg-white rounded-lg shadow-xl">
@@ -162,7 +191,6 @@ const TaskDetail = () => {
         <FaArrowLeft className="mr-2" /> Back
       </button>
 
-      {/* Lock banner when project is completed */}
       {locked && (
         <div className="mb-4 flex items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800">
           <FaLock />
@@ -170,9 +198,8 @@ const TaskDetail = () => {
         </div>
       )}
 
-      {/* Three-Column Grid Layout */}
+      {/* Three columns */}
       <div className="grid md:grid-cols-3 gap-6 mt-8">
-        {/* Project Leader Card */}
         <div className="bg-gradient-to-r from-teal-400 to-teal-600 p-6 rounded-lg shadow-md text-white">
           <div className="flex items-center mb-4">
             <FaUserAlt className="text-3xl mr-4" />
@@ -182,7 +209,6 @@ const TaskDetail = () => {
           <p><strong>Email:</strong> {leaderDetail.email || "N/A"}</p>
         </div>
 
-        {/* Project Details Card */}
         <div className="bg-gradient-to-r from-indigo-500 to-indigo-800 p-6 rounded-lg shadow-md text-white">
           <div className="flex items-center mb-4">
             <FaCalendarCheck className="text-3xl mr-4" />
@@ -193,7 +219,6 @@ const TaskDetail = () => {
           <p><strong>Description:</strong> {projectDetail.description || "No description available"}</p>
         </div>
 
-        {/* Teammates Card */}
         <div className="bg-gradient-to-r from-purple-500 to-purple-700 p-6 rounded-lg shadow-md text-white">
           <div className="flex items-center mb-4">
             <FaUsers className="text-3xl mr-4" />
@@ -203,11 +228,7 @@ const TaskDetail = () => {
             {projectDetail.members && projectDetail.members.length > 0 ? (
               projectDetail.members.map((member) => (
                 <li key={member._id} className="flex items-center space-x-3">
-                  <img
-                    src="https://via.placeholder.com/40"
-                    alt="profile"
-                    className="rounded-full w-10 h-10"
-                  />
+                  <img src="https://via.placeholder.com/40" alt="profile" className="rounded-full w-10 h-10" />
                   <div>
                     <p className="text-md">{member.name || member.email || "Member"}</p>
                     <p className="text-sm text-gray-300">{member.project_role || "No role assigned"}</p>
@@ -221,18 +242,12 @@ const TaskDetail = () => {
         </div>
       </div>
 
-      {/* Task Status Card */}
+      {/* Task status + slider */}
       <div
         className="p-6 rounded-lg shadow-md mt-8"
-        style={{
-          backgroundColor: "white",
-          boxShadow: "0px 4px 10px rgba(0, 0, 0, 0.1)",
-          borderRadius: "10px",
-          border: "2px solid #AA405B",
-        }}
+        style={{ backgroundColor: "white", boxShadow: "0px 4px 10px rgba(0, 0, 0, 0.1)", borderRadius: "10px", border: "2px solid #AA405B" }}
       >
         <div className="flex">
-          {/* Left side: Task details */}
           <div className="flex-1 pr-6">
             <div className="flex items-center mb-4">
               <FaCalendarCheck className="text-3xl mr-4 text-[#AA405B]" />
@@ -248,17 +263,12 @@ const TaskDetail = () => {
             </p>
 
             <p className="text-lg font-medium text-gray-700">
-              Deadline:{" "}
-              <span className="text-gray-500">
-                {taskDetail.end_at ? new Date(taskDetail.end_at).toLocaleDateString() : "—"}
-              </span>
+              Deadline: <span className="text-gray-500">{taskDetail.end_at ? new Date(taskDetail.end_at).toLocaleDateString() : "—"}</span>
             </p>
           </div>
 
-          {/* Divider */}
           <div className="border-l-2 border-gray-300 mx-4"></div>
 
-          {/* Right side: Progress section */}
           <div className="flex-1">
             <div className="mt-6">
               <label className="block text-sm font-medium text-gray-700 mb-2">Set Your Progress</label>
@@ -268,7 +278,7 @@ const TaskDetail = () => {
                   min="0"
                   max="100"
                   value={progress}
-                  onChange={handleProgressChange}
+                  onChange={e => setProgress(parseInt(e.target.value, 10))}
                   className={`w-full ${locked ? "opacity-50 cursor-not-allowed" : ""}`}
                   disabled={locked}
                 />

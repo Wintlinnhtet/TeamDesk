@@ -14,19 +14,21 @@ def _oid(x):
         return None
 
 def _ser(n):
+    created = n.get("created_at")
+    if isinstance(created, datetime):
+        created = created.isoformat() + "Z"
+
     return {
-        "_id": str(n["_id"]),
+        "_id": str(n.get("_id")),
         "type": n.get("type"),
         "title": n.get("title"),
         "message": n.get("message"),
         "data": n.get("data") or {},
-        "read": bool(n.get("read", False)),
-        "created_at": (
-            n.get("created_at").isoformat()
-            if isinstance(n.get("created_at"), datetime)
-            else n.get("created_at")
-        ),
+        "created_at": created,
+        "read": bool(n.get("read")),  # <— keep actual value
     }
+
+    
 
 @bp_notifications.get("/")
 def list_notifications():
@@ -52,3 +54,16 @@ def mark_all_read():
         return jsonify({"updated": 0}), 200
     res = col.update_many({"for_user": uid, "read": {"$ne": True}}, {"$set": {"read": True}})
     return jsonify({"updated": int(res.modified_count)}), 200
+
+
+@bp_notifications.route("/<nid>", methods=["DELETE", "OPTIONS"])
+def delete_notification(nid):
+    # handle preflight cleanly
+    if request.method == "OPTIONS":
+        return ("", 204)
+    try:
+        _id = ObjectId(str(nid))
+    except Exception:
+        return jsonify({"error": "invalid id"}), 400
+    res = db["notifications"].delete_one({"_id": _id})
+    return jsonify({"ok": True, "deleted_count": getattr(res, "deleted_count", 0)}), 200

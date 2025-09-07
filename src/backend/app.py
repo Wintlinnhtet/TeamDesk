@@ -113,7 +113,7 @@ users_collection = db["users"]
 projects_collection = db["projects"]
 tasks_collection   = db["tasks"]
 notifications_collection = db.get_collection("notifications")
-logs_collection = db.get_collection("logs")
+
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     """
@@ -196,67 +196,76 @@ def add_cors_headers(resp):
 @app.get("/ping")
 def ping():
     return jsonify({"ok": True, "from": "flask"})
+# ---- replace the whole _actor_from_request with this ----
+
+# --- actor helper (REPLACE existing function) ---
 def _actor_from_request(data=None):
+    """
+    Tries HARD to derive the acting user from:
+      - request JSON body: updated_by / actor_id / user_id (+ *_name)
+      - request headers:   X-Actor-Id / X-User-Id / X-UserId / X-Uid
+                           X-Actor-Name / X-User-Name / X-Username
+      - cookies:           user_id / user_name (if you ever set them)
+      - DB lookup:         if we get an id but no name, fetch name/email
+    Returns: (ObjectId | None, display_name: str)
+    """
     data = data or {}
-    # Prefer explicit body fields if provided; else custom headers.
-    uid_raw  = data.get("updated_by") or data.get("actor_id") or request.headers.get("X-Actor-Id")
-    name_raw = data.get("updated_by_name") or data.get("actor_name") or request.headers.get("X-Actor-Name")
+
+    # 1) body fields
+    uid_raw  = data.get("updated_by") or data.get("actor_id") or data.get("user_id") or data.get("created_by")
+    name_raw = data.get("updated_by_name") or data.get("actor_name") or data.get("user_name")
+
+    # 2) headers
+    hdr = request.headers
+    uid_hdr = (
+        hdr.get("X-Actor-Id") or hdr.get("X-User-Id") or
+        hdr.get("X-UserId")  or hdr.get("X-Uid")
+    )
+    name_hdr = (
+        hdr.get("X-Actor-Name") or hdr.get("X-User-Name") or
+        hdr.get("X-Username")
+    )
+    uid_raw  = uid_raw  or uid_hdr
+    name_raw = name_raw or name_hdr
+
+    # 3) cookies (optional)
+    if not uid_raw:
+        cid = request.cookies.get("user_id")
+        if cid:
+            uid_raw = cid
+    if not name_raw:
+        cname = request.cookies.get("user_name")
+        if cname:
+            name_raw = cname
+
+    # 4) coerce id, lookup name if missing
     uid = None
     if uid_raw:
         try:
             uid = ObjectId(str(uid_raw))
         except Exception:
             uid = None
-    # If we have uid but no name, try lookup
+
     if uid and not name_raw:
         u = users_collection.find_one({"_id": uid}, {"name": 1, "email": 1})
         if u:
             name_raw = u.get("name") or u.get("email")
-    return uid, (name_raw or "Someone")
 
-def log_event(doc: dict):
-    """
-    doc should include:
-      type, created_at (optional), user_id (opt), user_name (opt),
-      project_id (opt), project_name (opt), task_id (opt), task_title (opt),
-      ... any extra fields like progress_before/after, status_before/after, message
-    """
-    try:
-        d = dict(doc)
-        d.setdefault("created_at", datetime.utcnow())
-        ins = logs_collection.insert_one(d)
-        return str(ins.inserted_id)
-    except Exception:
-        return None
+    # Final display name
+    display = (name_raw or "").strip()
+    if not display and uid:
+        # last-ditch: show email if available
+        u = users_collection.find_one({"_id": uid}, {"email": 1})
+        display = (u or {}).get("email", "")
+
+    return uid, (display or "Someone")
+
 
 def _safe_str_id(x):
     try:
         return str(x)
     except Exception:
         return None
-
-def _serialize_log(l):
-    return {
-        "_id": _safe_str_id(l.get("_id")),
-        "type": l.get("type"),
-        "created_at": (l.get("created_at").isoformat() if isinstance(l.get("created_at"), datetime) else l.get("created_at")),
-        "at": (l.get("created_at").isoformat() if isinstance(l.get("created_at"), datetime) else l.get("created_at")),
-        "user_id": _safe_str_id(l.get("user_id")),
-        "user_name": l.get("user_name"),
-        "project_id": _safe_str_id(l.get("project_id")),
-        "project_name": l.get("project_name"),
-        "task_id": _safe_str_id(l.get("task_id")),
-        "task_title": l.get("task_title"),
-        "message": l.get("message"),
-        "action": l.get("action"),
-        "progress_before": l.get("progress_before"),
-        "progress_after": l.get("progress_after"),
-        "status_before": l.get("status_before"),
-        "status_after": l.get("status_after"),
-        "detail": l.get("detail"),
-    }
-
-# recompute & optionally log project progress changes
 
 @app.post("/add-member")
 def add_member():
@@ -539,19 +548,8 @@ def recompute_and_store_project_progress(project_id_any) -> int:
             data={"project_id": pid_str, "project_name": proj_name, "from": old_pct, "to": pct}
         )
 
-        # optional: log event if you want
-        try:
-            log_event({
-                "type": "project_progress",
-                "project_id": pid,
-                "project_name": proj_name,
-                "progress_before": old_pct,
-                "progress_after": pct,
-                "user_id": uid,
-                "user_name": uname,
-            })
-        except Exception:
-            pass
+  
+       
 
     return pct
 
@@ -1178,21 +1176,29 @@ def task_detail(task_id):
         # recompute & broadcast project progress
         recompute_and_store_project_progress(project_id)
 
-        # ---- ADMIN NOTIFY: task progress / completion (now that DB is updated) ----
+          # ---- ADMIN NOTIFY: task progress / completion (now that DB is updated) ----
         try:
             actor_id, actor_name = _actor_from_request(data)
+
+            # derive new values from patch or previous doc
             new_status = (patch.get("status") or t.get("status") or "").strip().lower()
             new_progress = int(patch.get("progress") if patch.get("progress") is not None else (t.get("progress") or 0))
+
             proj = projects_collection.find_one({"_id": project_id}, {"name": 1})
             proj_name = (proj or {}).get("name", "")
-            title_now = patch.get("title") or t.get("title","")
+            title_now = patch.get("title") or t.get("title", "")
 
             if new_progress != prev_progress:
                 notify_admins(
                     kind="task_progress_changed",
                     title=f"Task progress • {proj_name}",
                     body=f"{actor_name} set '{title_now}' to {new_progress}% (was {prev_progress}%).",
-                    data={"project_id": str(project_id), "task_id": str(tid)},
+                    data={
+                        "project_id": str(project_id),
+                        "task_id": str(tid),
+                        "actor_id": str(actor_id) if actor_id else None,
+                        "actor_name": actor_name,
+                    },
                 )
 
             just_completed = (
@@ -1206,10 +1212,18 @@ def task_detail(task_id):
                     kind="task_completed",
                     title=f"Task completed • {proj_name}",
                     body=f"{actor_name} marked '{title_now}' as complete. Assignee: {assignee_label}.",
-                    data={"project_id": str(project_id), "task_id": str(tid)},
+                    data={
+                        "project_id": str(project_id),
+                        "task_id": str(tid),
+                        "assignee_id": str(t.get("assignee_id")),
+                        "assignee_name": assignee_label,
+                        "actor_id": str(actor_id) if actor_id else None,
+                        "actor_name": actor_name,
+                    },
                 )
         except Exception:
             pass
+
 
         return jsonify({"message": "Task updated successfully", "task": patch}), 200
 
