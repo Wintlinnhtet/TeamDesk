@@ -37,11 +37,23 @@ const SignIn = () => {
                 localStorage.setItem("user", JSON.stringify(data.user));
 
                 // Redirect based on role
-                if (data.user.role === "admin") {
-                    navigate("/admin");   // Admin goes to /admin
-                } else {
-                    navigate("/dashboard"); // Normal user goes to /dashboard
-                }
+                // if (data.user.role === "admin") {
+                //     navigate("/admin");   // Admin goes to /admin
+                // } else {
+                //     navigate("/dashboard"); // Normal user goes to /dashboard
+                // }
+                 // 🔥 Redirect based on role and alreadyRegister
+                    const { role, alreadyRegister } = data.user;
+
+                        if (role === "admin") {
+                        navigate("/admin");   // Admin goes to /admin
+                        } else {
+                            if (alreadyRegister) {
+                            navigate("/dashboard"); // Registered users go to /dashboard
+                         } else {
+                            navigate("/register");  // Not registered users go to /register
+                    }
+            }
 
             } else {
                 setMessage(data.error || 'Login failed');
@@ -87,13 +99,13 @@ const SignIn = () => {
                             />
                         </div>
 
-                        <div className="flex justify-between w-full py-4">
+                        {/* <div className="flex justify-between w-full py-4">
                             <div className="mr-24">
                                 <input type="checkbox" name="ch" id="ch" className="mr-2" />
                                 <span className="text-md">Remember password</span>
                             </div>
                             <span className="font-bold text-md">Forgot password?</span>
-                        </div>
+                        </div> */}
 
                         <button
                             type="submit"
@@ -106,10 +118,10 @@ const SignIn = () => {
 
                     {message && <p className="text-center text-red-500">{message}</p>}
 
-                    <div className="text-center text-gray-400">
+                    {/* <div className="text-center text-gray-400">
                         Don't have an account?
                         <Link to="/" className="font-bold text-black hover:underline">Sign up</Link>
-                    </div>
+                    </div> */}
                 </div>
 
                 {/* Right side */}

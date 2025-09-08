@@ -1,244 +1,149 @@
-import React from 'react';
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { FiPhone, FiMail } from 'react-icons/fi';
-import { FaSearch } from 'react-icons/fa';
+import { FaSearch } from "react-icons/fa";
+import { FiMail, FiPhone } from "react-icons/fi";
+import { FiTrash2 } from "react-icons/fi";
 
 const Members = () => {
-    const customColor = "#AA405B";
-    const navigate = useNavigate();
+  const navigate = useNavigate();
+  const [members, setMembers] = useState([]); // ✅ define members state
+  const [searchTerm, setSearchTerm] = useState("");
+
+  // Get user from localStorage
+  const user = JSON.parse(localStorage.getItem("user"));
+
+  const handleDelete = async (memberId) => {
+  if (!window.confirm("Are you sure you want to delete this user?")) return;
+
+  try {
+    const res = await fetch(`http://localhost:5000/delete-user/${memberId}`, {
+      method: "DELETE",
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      alert("User deleted successfully!");
+      window.location.reload(); // or re-fetch members list
+    } else {
+      alert(data.error || "Failed to delete user.");
+    }
+  } catch (err) {
+    console.error("Delete error:", err);
+    alert("Server error.");
+  }
+};
+
+  // Example: fetch members from backend
+  useEffect(() => {
+    const fetchMembers = async () => {
+      try {
+        const res = await fetch("http://localhost:5000/registered-members");
+        const data = await res.json();
+        console.log("Fetched members:", data); // 👈 check here
+        if (res.ok) {
+          setMembers(data); // ✅ save in state
+        }
+      } catch (err) {
+        console.error("Error fetching members:", err);
+      }
+    };
+
+    fetchMembers();
+  }, []);
+
+  // Filter by search term
+  const filteredMembers = members.filter(
+  (m) =>
+    m.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    m.email?.toLowerCase().includes(searchTerm.toLowerCase())
+);
+
   return (
-   
     <div className="bg-gray-100 min-h-screen p-10">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-8">
+        <div className="relative w-full md:w-1/2">
+          <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
+            <FaSearch className="w-4 h-4" />
+          </span>
+          <input
+            type="text"
+            placeholder="Search"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#AA405B] shadow-sm"
+          />
+        </div>
 
-  <div className="relative w-full md:w-1/2">
-      <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-gray-400">
-        <FaSearch className="w-4 h-4" />
-      </span>
-      <input
-        type="text"
-        placeholder="Search"
-        className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#AA405B] shadow-sm"
-      />
-    </div>
+        {user?.role === "admin" && (
+          <div className="flex items-center gap-4">
+            <button
+              className="bg-[#AA405B] text-white px-5 py-2 rounded-md"
+              onClick={() => navigate("/add-member")}
+            >
+              + Add Candidate
+            </button>
+          </div>
+        )}
+      </div>
 
-  {/* Right Controls: Filter + Add */}
-  <div className="flex items-center gap-4">
-    <button className="flex items-center gap-2 border border-gray-300 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-100">
-      <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L15 13.414V19a1 1 0 01-1.447.894l-4-2A1 1 0 019 17v-3.586L3.293 6.707A1 1 0 013 6V4z" />
-      </svg>
-      Filter
-    </button>
+      <h1 className="text-3xl font-semibold text-[#AA405B] mb-6">
+      {filteredMembers.length}{" "}
+      {filteredMembers.length === 1 ? "Employee" : "Employees"}
+      </h1>
 
-    <button className="bg-[#AA405B] text-white px-5 py-2 rounded-md"
-    onClick={() => navigate("/add-member")}>
-      + Add Candidate
-    </button>
-  </div>
-</div>
-
-
-      <h1 className="text-3xl font-semibold text-[#AA405B] mb-6">32 Employees</h1>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-        
-        
-        {/* Card 1 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
+        {filteredMembers.map((member) => (
+          <div
+            key={member._id}
+            className="bg-white rounded-xl shadow-md p-5 flex-col items-center"
+          >
+            
+<div className="relative w-full">
+  {user.role === "admin" && (
+    <button
+      onClick={() => handleDelete(member._id)}
+      className="absolute top-2 right-2 text-gray-400 hover:text-red-500 transition"
+      title="Delete User"
+    >
+      <FiTrash2 size={20} />
+    </button>
+  )}
+</div>
+            <div className="flex-col items-center mb-4">
+              
+              <img
+                src={
+                    member.profileImage && member.profileImage.trim() !== ""
+                    ? `http://localhost:5000/uploads/${member.profileImage}`
+                    : "https://cdn-icons-png.flaticon.com/512/847/847969.png"
+                }
+                  alt={member.name || "Profile"}
+                  className="w-18 h-18 rounded-full mr-3 object-cover"
+              />
 
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
+
+              <div>
+                <h2 className="font-semibold text-lg">{member.name || "Unnamed"}</h2>
+                <p className="text-gray-500 text-sm">{member.position || "Member"}</p>
+              </div>
+            </div>
+            <div className="text-sm text-gray-600 space-y-1">
+              <p className="flex gap-2">
+                <FiMail className="text-black relative top-[2px] text-[18px]" />
+                {member.email || "N/A"}
+              </p>
+              <p className="flex gap-2">
+                <FiPhone className="text-black relative top-[2px] text-[18px]" />
+                {member.phone || "N/A"}
+              </p>
+              <p><strong>DOB:</strong> {member.dob || "N/A"}</p>
+              <p><strong>Address:</strong> {member.address || "N/A"}</p>
             </div>
           </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
-        {/* Card 2 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
-
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
-        {/* Card 3 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
-
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
-        {/* Card 4 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
-
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
-        {/* Card 5 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
-
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
-        {/* Card 6 */}
-        <div className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
-            <div className="relative w-full">
-            <button className="absolute top-2 right-0 text-gray-400 hover:text-gray-600 text-3xl font-bold p-2">
-              ⋯
-            </button>
-
-        </div>
-          <div className="flex-col items-center mb-4">
-            <img src="https://randomuser.me/api/portraits/men/10.jpg" alt="Profile" className="w-18 h-18 rounded-full mr-3" />
-            <div>
-              <h2 className="font-semibold text-lg">Bessie Cooper</h2>
-              <p className="text-gray-500 text-sm">Project Manager</p>
-            </div>
-          </div>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p><strong>Department:</strong> Design Team</p>
-            <p><strong>Hired Date:</strong> 7/27/13</p>
-
-            <p className="flex gap-2">
-              <FiMail className="text-black  relative top-[2px] text-[18px]" />
-              Ronald043@gmail.com
-            </p>
-            <p className="flex gap-2">
-              <FiPhone className="text-black  relative top-[2px] text-[18px]" />
-              (229) 555-0109
-            </p>
-            {/* <p><strong>Email:</strong> Ronald043@gmail.com</p>
-            <p><strong>Phone:</strong> (229) 555-0109</p> */}
-          </div>
-        </div>
-
+        ))}
       </div>
     </div>
   );
 };
 
 export default Members;
-

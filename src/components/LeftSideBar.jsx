@@ -8,6 +8,7 @@ import {
   FaUsers,
   FaCog,
   FaSignOutAlt,
+  FaBullhorn,
 } from "react-icons/fa";
 
 const LeftSideBar = () => {
@@ -93,6 +94,16 @@ const LeftSideBar = () => {
                 <span className={baseText}>Members</span>
               </Link>
             </li>
+            <li className="mb-5"> {/* Added margin-bottom to create space between Members and the bottom items */}
+            <Link 
+              to="/announcement" 
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+              style={{ color: customColor }} // Custom color for text
+            >
+              <FaBullhorn className="text-xl" />
+              <span>Announcement</span>
+            </Link>
+          </li>
           
         </ul>
       </nav>

@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import  Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from database import db
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -7,8 +7,13 @@ from datetime import datetime
 import json
 from flask_socketio import SocketIO, emit, join_room, leave_room
 import re
+from werkzeug.utils import secure_filename
+import os
+
 
 app = Flask(__name__)
+
+
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
 SERVER_IP = "192.168.1.5"
@@ -92,6 +97,7 @@ def options_members():
 users_collection = db["users"]
 projects_collection = db["projects"]
 tasks_collection   = db["tasks"]
+announcement_collection = db["announcement"]
 
 def to_object_id(id_str):
     try:
@@ -252,39 +258,103 @@ def add_member():
         "position": position,
         "password": hashed_password,
         "role": "member",
+        "alreadyRegister": False  # 🔥 boolean field
     })
     return jsonify({"message": "Member added successfully!"}), 201
 
-# -------------------- UPDATE USER --------------------
+# -------------------- register USER --------------------
+# @app.patch("/update-user/<user_id>")
+# def update_user(user_id):
+#     data = request.get_json() or {}
+#     name = data.get("name")
+#     dob = data.get("dob")
+#     phone = data.get("phone")
+#     address = data.get("address")
+#     password = data.get("password")
+
+#     if not name or not dob or not phone or not address or not password:
+#         return jsonify({"error": "All fields are required"}), 400
+
+#     hashed_password = generate_password_hash(password)
+#     try:
+#         result = users_collection.update_one(
+#             {"_id": ObjectId(user_id)},
+#             {"$set": {
+#                 "name": name,
+#                 "dob": dob,
+#                 "phone": phone,
+#                 "address": address,
+#                 "password": hashed_password,
+#                 "alreadyRegister": True  # 🔥 Highlight: mark user as registered
+#             }}
+#         )
+#         if result.modified_count == 0:
+#             return jsonify({"error": "Update failed"}), 400
+#         return jsonify({"message": "Profile updated successfully!"})
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+
+# Folder for uploaded images
+UPLOAD_FOLDER = "uploads"
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+
+# Update user endpoint
 @app.patch("/update-user/<user_id>")
 def update_user(user_id):
-    data = request.get_json() or {}
-    name = data.get("name")
-    dob = data.get("dob")
-    phone = data.get("phone")
-    address = data.get("address")
-    password = data.get("password")
+    # Get text fields from form
+    name = request.form.get("name")
+    dob = request.form.get("dob")
+    phone = request.form.get("phone")
+    address = request.form.get("address")
+    password = request.form.get("password")
 
     if not name or not dob or not phone or not address or not password:
         return jsonify({"error": "All fields are required"}), 400
 
     hashed_password = generate_password_hash(password)
+
+    # Handle profile image (optional)
+    profile_image_filename = None
+    if "profileImage" in request.files:
+        file = request.files["profileImage"]
+        if file.filename != "" and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            profile_image_filename = filename  # Save only filename in DB
+
+    update_data = {
+        "name": name,
+        "dob": dob,
+        "phone": phone,
+        "address": address,
+        "password": hashed_password,
+        "alreadyRegister": True
+    }
+
+    if profile_image_filename:
+        update_data["profileImage"] = profile_image_filename  # Store filename in DB
+
     try:
         result = users_collection.update_one(
             {"_id": ObjectId(user_id)},
-            {"$set": {
-                "name": name,
-                "dob": dob,
-                "phone": phone,
-                "address": address,
-                "password": hashed_password
-            }}
+            {"$set": update_data}
         )
         if result.modified_count == 0:
             return jsonify({"error": "Update failed"}), 400
         return jsonify({"message": "Profile updated successfully!"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 # -------------------- SIGN IN --------------------
 @app.post("/signin")
@@ -305,7 +375,8 @@ def signin():
             "_id": str(user["_id"]),
             "name": user.get("name"),
             "email": user.get("email"),
-            "role": user.get("role")
+            "role": user.get("role"),
+            "alreadyRegister": user.get("alreadyRegister", False)  # 🔥 include boolean
         }
     })
 
@@ -1112,6 +1183,175 @@ def get_user(user_id):
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+
+# Folder for uploaded images
+UPLOAD_FOLDER = "uploads"
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# Serve uploaded images
+@app.route('/uploads/<filename>')
+def uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+@app.route("/api/announcement", methods=["POST"])
+def save_announcement():
+    try:
+        title = request.form.get("title")  # ✅ get title
+        message = request.form.get("message")
+        send_to = request.form.get("sendTo")
+        image_file = request.files.get("image")
+
+        # image_url = None
+        # if image_file:
+        #     filename = secure_filename(image_file.filename)
+        #     filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        #     image_file.save(filepath)
+        #     # image_url = f"/{UPLOAD_FOLDER}/{filename}"  # frontend can fetch from this path
+        #     # Full URL so frontend can access
+        #     image_url = f"http://localhost:5000/uploads/{filename}"
+         # 🔥 Changed: store only filename, not full URL
+        filename = None
+        if image_file:
+            filename = secure_filename(image_file.filename)
+            filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+            image_file.save(filepath)
+
+        announcement = {
+            "title": title,  # ✅ store title
+            "message": message,
+            "sendTo": send_to,
+            "image": filename,
+            "createdAt": datetime.utcnow()
+        }
+
+        result = announcement_collection.insert_one(announcement)
+
+        return jsonify({"success": True, "id": str(result.inserted_id)})
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+    
+    
+    
+@app.route("/api/announcement", methods=["GET"])
+def get_announcements():
+    try:
+        announcements = []
+        for a in announcement_collection.find().sort("createdAt", -1):
+            # 🔥 Always return full URL for frontend
+            image_url = f"http://localhost:5000/uploads/{a['image']}" if a.get("image") else None
+            announcements.append({
+                "id": str(a["_id"]),
+                "title": a.get("title", ""),  # ✅ include title
+                "message": a.get("message", ""),
+                "sendTo": a.get("sendTo", "all"),
+                # "image": a.get("image", None),
+                 "image": image_url,  # 🔥 full URL
+                "createdAt": a.get("createdAt").isoformat() if a.get("createdAt") else None
+            })
+        return jsonify(announcements)
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/announcement/<id>", methods=["GET"])
+def get_announcement_detail(id):
+    try:
+        a = announcement_collection.find_one({"_id": ObjectId(id)})
+        if not a:
+            return jsonify({"error": "Announcement not found"}), 404
+        
+        image_url = f"http://localhost:5000/uploads/{a['image']}" if a.get("image") else None  # 🔥
+
+        announcement = {
+            "id": str(a["_id"]),
+            "title": a.get("title", ""),
+            "message": a.get("message", ""),
+            "sendTo": a.get("sendTo", "all"),
+            # "image": a.get("image", None),
+            "image": image_url,  # 🔥 full URL
+            "createdAt": a.get("createdAt").isoformat() if a.get("createdAt") else None
+        }
+        return jsonify(announcement)
+    except Exception as e:
+        print("Error:", e)
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/announcement/<id>", methods=["DELETE"])
+def delete_announcement(id):
+    try:
+        result = announcement_collection.delete_one({"_id": ObjectId(id)})
+        if result.deleted_count == 1:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Not found"}), 404
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+    # ✅ Update announcement
+@app.route("/api/announcement/<id>", methods=["PUT"])
+def update_announcement(id):
+    try:
+        title = request.form.get("title")
+        message = request.form.get("message")
+        sendTo = request.form.get("sendTo")
+
+        update_data = {
+            "title": title,
+            "message": message,
+            "sendTo": sendTo
+        }
+
+       
+        if "image" in request.files:
+            image = request.files["image"]
+            if image and image.filename != "":
+                filename = secure_filename(image.filename)
+                filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+                image.save(filepath)
+                update_data["image"] = filename  # 🔥 filename only
+
+        result = announcement_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$set": update_data}
+        )
+
+        if result.matched_count == 0:
+            return jsonify({"success": False, "error": "Announcement not found"}), 404
+
+        return jsonify({"success": True, "message": "Announcement updated successfully"})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+    # -------------------- GET ALL REGISTERED MEMBERS --------------------
+@app.get("/registered-members")
+def get_members():
+    try:
+        members = list(users_collection.find({"alreadyRegister": True}))
+        for m in members:
+            m["_id"] = str(m["_id"])
+        return jsonify(members)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.delete("/delete-user/<user_id>")
+def delete_user(user_id):
+    try:
+        result = users_collection.delete_one({"_id": ObjectId(user_id)})
+        if result.deleted_count == 0:
+            return jsonify({"error": "User not found"}), 404
+        return jsonify({"message": "User deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # -------------------- bind to LAN --------------------
 if __name__ == "__main__":

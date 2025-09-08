@@ -12,6 +12,8 @@ import TaskAssign from './pages/task_assign';
 import ProjectCreate from './pages/project_create';
 import SignIn from './components/SignIn';
 import FileManager from './pages/file_sharing';
+import Announcement from './pages/Announcement';
+import Announce from './pages/Announce';
 import Profile from './pages/set_profile';
 import Projects from './pages/Projects';
 import Register from './components/Register';
@@ -19,6 +21,9 @@ import ProjectTasks from './pages/ProjectTasks';
 import TaskDetail from './pages/TaskDetail';
 import AllProjects from './pages/AllProjects';
 import ActivityFeed from './components/ActivityFeed';
+import AnnouncementDetail from "./pages/AnnouncementDetail";
+import EditAnnouncement from "./pages/EditAnnouncement";
+
 const App = () => {
   const customColor = "#AA405B";
 
@@ -47,6 +52,10 @@ const App = () => {
           <Route path="/members" element={<Members />} />
           <Route path="/profile" element={<Profile />} />
           <Route path="/file-sharing" element={<FileManager />} />
+          <Route path="/announcement" element={<Announcement />} />
+          <Route path="/announce" element={<Announce />} />
+          <Route path="/announcement/:id" element={<AnnouncementDetail />} />
+          <Route path="/edit-announcement/:id" element={<EditAnnouncement />} />
           <Route path="/project-tasks" element={<ProjectTasks />} />
         </Route>
       </Routes>
