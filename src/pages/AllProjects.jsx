@@ -74,16 +74,17 @@ const Avatar = ({ email, name, picture, avatar }) => {
   );
 };
 
-// Renders up to 3 avatars + “+n”
+// Renders up to 3 avatars + “+n” and shows a tooltip with ALL member names on hover
 const Avatars = ({ members = [], fallbackCount = 0 }) => {
-  if ((!members || members.length === 0) && !fallbackCount) return null;
+  const hasMembers = Array.isArray(members) && members.length > 0;
+  if (!hasMembers && !fallbackCount) return null;
 
-  const shownMembers = (members || []).slice(0, 3);
-  const remainder = members.length > 0 ? Math.max(0, members.length - 3) : Math.max(0, fallbackCount - 3);
+  const shownMembers = hasMembers ? members.slice(0, 3) : [];
+  const remainder = hasMembers ? Math.max(0, members.length - 3) : Math.max(0, fallbackCount - 3);
 
   return (
-    <div className="flex -space-x-2">
-      {shownMembers.length > 0
+    <div className="relative group flex -space-x-2 items-center">
+      {hasMembers
         ? shownMembers.map((m, idx) => (
             <Avatar key={idx} email={m.email} name={m.name} picture={m.picture} avatar={m.avatar} />
           ))
@@ -96,9 +97,26 @@ const Avatars = ({ members = [], fallbackCount = 0 }) => {
               ?
             </div>
           ))}
+
       {remainder > 0 && (
-        <div className="w-8 h-8 rounded-full ring-2 ring-white bg-slate-200 flex items-center justify-center text-slate-600 text-xs font-semibold">
+        <div
+          className="w-8 h-8 rounded-full ring-2 ring-white bg-slate-200 flex items-center justify-center text-slate-600 text-xs font-semibold"
+          aria-label={`+${remainder} more`}
+        >
           +{remainder}
+        </div>
+      )}
+
+      {/* Tooltip with ALL member names (only if we actually have member objects) */}
+      {hasMembers && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-50 pointer-events-none">
+          <div className="max-w-[260px] max-h-56 overflow-auto whitespace-normal text-xs bg-white text-slate-700 border border-slate-200 shadow-lg rounded-md px-3 py-2">
+            {members.map((m, idx) => (
+              <div key={idx} className="truncate">
+                {m?.name || m?.email || "Member"}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -336,7 +354,7 @@ function AllProjects({ forUserId }) {
   };
 
   useEffect(() => {
-    let mounted = true; // <-- FIX: lowercase
+    let mounted = true;
     const url = new URL(`${API_BASE}/projects`);
     if (forUserId) url.searchParams.set("for_user", forUserId);
 
@@ -361,7 +379,7 @@ function AllProjects({ forUserId }) {
     })();
 
     return () => {
-      mounted = false; // <-- FIX: lowercase
+      mounted = false;
     };
   }, [forUserId]);
 

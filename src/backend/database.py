@@ -16,3 +16,7 @@ try:
 except Exception as e:
     print("❌ MongoDB connection failed!")
     print("Error:", e)
+    # --- add this to the bottom of src/backend/database.py ---
+def get_db():
+    """Return the shared MongoDB database handle."""
+    return db

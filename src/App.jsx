@@ -24,6 +24,8 @@ import ActivityFeed from './components/ActivityFeed';
 import AnnouncementDetail from "./pages/AnnouncementDetail";
 import EditAnnouncement from "./pages/EditAnnouncement";
 
+import Notifications from './components/Notifications';
+import NotificationBell from './components/NotificationBell';
 const App = () => {
   const customColor = "#AA405B";
 
@@ -57,6 +59,7 @@ const App = () => {
           <Route path="/announcement/:id" element={<AnnouncementDetail />} />
           <Route path="/edit-announcement/:id" element={<EditAnnouncement />} />
           <Route path="/project-tasks" element={<ProjectTasks />} />
+            <Route path="/notifications" element={<Notifications />} />
         </Route>
       </Routes>
     </BrowserRouter>
