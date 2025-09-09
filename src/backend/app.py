@@ -1476,6 +1476,8 @@ def update_announcement(id):
 
 
     # -------------------- GET ALL REGISTERED MEMBERS --------------------
+
+
 @app.get("/registered-members")
 def get_members():
     try:
