@@ -5,10 +5,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from datetime import datetime
 import json
-from flask_socketio import SocketIO, emit, join_room, leave_room
+from flask_socketio import emit, join_room, leave_room
 import re
 from werkzeug.utils import secure_filename
 import os
+from backend.extensions import socketio
 # near other imports
 
 from bson import ObjectId
@@ -26,6 +27,7 @@ from backend.notifier import notify_admins, notify_users
 from backend.database import get_db
 
 
+from backend.file_sharing import file_sharing_bp
 
 
 app = Flask(__name__)
@@ -45,11 +47,13 @@ FRONTEND_ORIGINS = [
     f"http://{SERVER_IP}:5137",
 ]
 
-socketio = SocketIO(
+socketio.init_app(
     app,
     cors_allowed_origins=FRONTEND_ORIGINS,
     async_mode="eventlet"  # or "gevent"
 )
+# ✅ Register file_sharing blueprint
+app.register_blueprint(file_sharing_bp)
 
 # ---- rooms (one per project) ----
 @socketio.on("join", namespace="/rt")
@@ -64,7 +68,8 @@ def on_leave(data):
     if pid:
         leave_room(pid)
 # after FRONTEND_ORIGINS
-ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name"]
+ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name", "X-User-Id"]
+
 
 CORS(
     app,
@@ -73,6 +78,7 @@ CORS(
     allow_headers=ALLOWED_HEADERS,
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
+
 
 
 def _preflight_ok():
@@ -1521,4 +1527,6 @@ def delete_user(user_id):
 
 # -------------------- bind to LAN --------------------
 if __name__ == "__main__":
+    print("✅ Connected to MongoDB!")
+    print(f"📂 Available collections: {list(db.list_collection_names())}")
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)

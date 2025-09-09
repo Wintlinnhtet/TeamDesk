@@ -1,184 +1,250 @@
 import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
+import io from "socket.io-client";
 import { FaFolder, FaFileAlt, FaCloud, FaHdd } from "react-icons/fa";
 
 const API_URL = "http://localhost:5000/api";
+const SOCKET_URL = "http://localhost:5000/rt";
 
 function FileManager() {
   const [folders, setFolders] = useState([]);
-  const [selectedFolder, setSelectedFolder] = useState("");
-  const [selectedFile, setSelectedFile] = useState(null);
+  const [activeFolder, setActiveFolder] = useState(null);
+  const [previewFile, setPreviewFile] = useState(null); // File for preview
   const dropRef = useRef();
 
-  // Fetch folders and files
+  const userId = localStorage.getItem("userId") || "68a095c74b792955f29769f1"; 
+  axios.defaults.headers.common["X-User-Id"] = userId;
+
   const fetchFolders = async () => {
     try {
       const res = await axios.get(`${API_URL}/folders`);
       setFolders(res.data.folders || []);
     } catch (err) {
-      console.error(err);
+      console.error("Failed to fetch folders:", err.response?.data || err);
+      alert("Failed to fetch folders");
     }
   };
 
   useEffect(() => {
     fetchFolders();
+    const socket = io(SOCKET_URL);
+    socket.on("folder:created", (folder) => setFolders((prev) => [folder, ...prev]));
+    socket.on("folder:deleted", ({ _id }) => setFolders((prev) => prev.filter((f) => f._id !== _id)));
+    socket.on("file:uploaded", (fileDoc) => {
+      setFolders((prev) =>
+        prev.map((f) =>
+          f._id === fileDoc.folder_id.toString()
+            ? { ...f, files: [fileDoc, ...f.files] }
+            : f
+        )
+      );
+    });
+    socket.on("file:deleted", ({ _id, folder_id }) => {
+      setFolders((prev) =>
+        prev.map((f) =>
+          f._id === folder_id.toString()
+            ? { ...f, files: f.files.filter((file) => file._id !== _id) }
+            : f
+        )
+      );
+    });
+    return () => socket.disconnect();
   }, []);
 
-  // Upload file
-  const handleUpload = async (file) => {
-    if (!file || !selectedFolder) return alert("Select a folder first!");
-
-    const formData = new FormData();
-    formData.append("file", file);
-
+  const handleCreateFolder = async () => {
+    const name = prompt("Enter folder name:");
+    if (!name?.trim()) return;
     try {
-      await axios.post(`${API_URL}/folders/${selectedFolder}/files`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      fetchFolders();
-      setSelectedFile(null);
+      await axios.post(`${API_URL}/folders`, { name });
     } catch (err) {
-      console.error(err);
+      console.error("Create folder error:", err.response?.data || err);
+      alert(err.response?.data?.error || "Failed to create folder");
     }
   };
 
-  // Handle drag-and-drop
-  const handleDrop = (e) => {
-    e.preventDefault();
-    if (!selectedFolder) return alert("Select a folder first!");
-    const file = e.dataTransfer.files[0];
-    handleUpload(file);
+  const handleUpload = async (file, folderId) => {
+    if (!file || !folderId) return alert("Select a folder first!");
+    const formData = new FormData();
+    formData.append("file", file);
+    try {
+      await axios.post(`${API_URL}/folders/${folderId}/files`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+    } catch (err) {
+      console.error("Upload file error:", err.response?.data || err);
+      alert(err.response?.data?.error || "Failed to upload file");
+    }
   };
 
-  const handleDragOver = (e) => e.preventDefault();
+  const handleFileSelect = (folderId) => {
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.onchange = (e) => handleUpload(e.target.files[0], folderId);
+    fileInput.click();
+  };
 
-  // Delete file
   const handleDeleteFile = async (fileId) => {
     try {
       await axios.delete(`${API_URL}/files/${fileId}`);
-      fetchFolders();
     } catch (err) {
-      console.error(err);
+      console.error("Delete file error:", err.response?.data || err);
+      alert("Failed to delete file");
     }
   };
 
-  // Delete folder
-  const handleDeleteFolder = async (folderId) => {
-    try {
-      await axios.delete(`${API_URL}/folders/${folderId}`);
-      fetchFolders();
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  // Download file
+  // -------------------- DOWNLOAD --------------------
   const handleDownload = async (fileId, filename) => {
     try {
       const res = await axios.get(`${API_URL}/files/${fileId}`, { responseType: "blob" });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const url = window.URL.createObjectURL(res.data);
       const link = document.createElement("a");
       link.href = url;
       link.setAttribute("download", filename);
       document.body.appendChild(link);
       link.click();
+      link.remove();
     } catch (err) {
-      console.error(err);
+      console.error("Download error:", err.response?.data || err);
+      alert("Failed to download file");
     }
   };
 
+  // -------------------- PREVIEW --------------------
+  const handlePreview = async (fileId, filename) => {
+    try {
+      const res = await axios.get(`${API_URL}/files/${fileId}`, { responseType: "blob" });
+      const blobUrl = window.URL.createObjectURL(res.data);
+      setPreviewFile({ url: blobUrl, name: filename });
+    } catch (err) {
+      console.error("Preview error:", err.response?.data || err);
+      alert("Failed to preview file");
+    }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    if (!activeFolder) return alert("Select a folder first!");
+    handleUpload(e.dataTransfer.files[0], activeFolder);
+  };
+  const handleDragOver = (e) => e.preventDefault();
+
   return (
     <div className="min-h-screen bg-white px-8 py-10">
-      <h1 className="text-2xl font-bold text-[#AA405B] mb-6">📂 File Manager</h1>
+      <h1 className="text-2xl font-bold mb-6">📂 File Manager</h1>
 
-      {/* Upload Section */}
-      <div
-        className="flex flex-wrap gap-3 items-center mb-10 border-2 border-dashed p-4 rounded"
-        onDrop={handleDrop}
-        onDragOver={handleDragOver}
-        ref={dropRef}
-      >
-        <select
-          className="px-3 py-2 border rounded"
-          value={selectedFolder}
-          onChange={(e) => setSelectedFolder(e.target.value)}
+      <div className="flex gap-3 mb-6">
+        <button
+          onClick={handleCreateFolder}
+          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
         >
-          <option value="">Select Folder</option>
-          {folders.map((folder) => (
-            <option key={folder._id} value={folder._id}>
-              {folder.name}
-            </option>
-          ))}
-        </select>
-
-        <input
-          type="file"
-          onChange={(e) => {
-            setSelectedFile(e.target.files[0]);
-            handleUpload(e.target.files[0]);
-          }}
-          className="px-3 py-2 border rounded"
-        />
-        <span className="text-gray-500 text-sm ml-4">Or drag & drop file here</span>
+          Create Folder
+        </button>
       </div>
 
-      {/* Folder & Files Display */}
-      {folders.length === 0 ? (
-        <p className="text-gray-500">No folders found.</p>
-      ) : (
-        folders.map((folder) => (
-          <div key={folder._id} className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <FaFolder className="text-[#AA405B]" /> {folder.name}
-              </h2>
-              <button
-                onClick={() => handleDeleteFolder(folder._id)}
-                className="px-3 py-1 text-xs rounded-lg bg-red-600 text-white hover:bg-red-700"
-              >
-                Delete Folder
-              </button>
-            </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
-              {folder.files.length === 0 ? (
-                <p className="text-gray-500 text-sm">No files</p>
-              ) : (
-                folder.files.map((file) => (
-                  <div
-                    key={file._id}
-                    className="p-4 bg-white border rounded-xl shadow flex flex-col justify-between"
-                  >
-                    <div className="flex items-center gap-1 mb-2">
-                      <FaFileAlt className="text-[#AA405B] text-3xl" />
-                      {file.storage === "gridfs" ? (
-                        <FaCloud title="GridFS Storage" className="text-blue-500" />
-                      ) : (
-                        <FaHdd title="Local Storage" className="text-gray-500" />
-                      )}
-                    </div>
-                    <span className="text-gray-700 text-sm truncate mb-2">{file.filename}</span>
-                    <div className="flex flex-col gap-1">
-                      <button
-                        onClick={() => handleDownload(file._id, file.filename)}
-                        className="px-2 py-1 text-xs rounded-lg bg-[#AA405B] text-white hover:bg-[#922f4a]"
-                      >
-                        Download
-                      </button>
-                      <button
-                        onClick={() => handleDeleteFile(file._id)}
-                        className="px-2 py-1 text-xs rounded-lg bg-red-600 text-white hover:bg-red-700"
-                      >
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
+      {/* ------------------ Folder List ------------------ */}
+      <div className="flex flex-wrap gap-4 mb-6">
+        {folders.map((folder) => (
+          <div
+            key={folder._id}
+            onClick={() => setActiveFolder(folder._id)}
+            className={`cursor-pointer px-4 py-2 rounded border ${
+              activeFolder === folder._id ? "bg-blue-100 border-blue-600" : "bg-gray-100 border-gray-300"
+            } flex items-center gap-2`}
+          >
+            <FaFolder className="text-blue-500" /> {folder.name}
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDeleteFolder(folder._id);
+              }}
+              className="ml-2 px-2 py-0.5 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+            >
+              Delete
+            </button>
           </div>
-        ))
+        ))}
+      </div>
+
+      {/* ------------------ Files for active folder ------------------ */}
+      {activeFolder && (
+        <div>
+          <div
+            className="flex gap-3 items-center mb-4 border-2 border-dashed p-4 rounded"
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            ref={dropRef}
+          >
+            <span>Drag & drop file here</span>
+            <button
+              onClick={() => handleFileSelect(activeFolder)}
+              className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+            >
+              Upload File
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {folders.find((f) => f._id === activeFolder)?.files.map((file) => (
+              <div key={file._id} className="p-3 bg-white border rounded shadow flex flex-col gap-2">
+                <div className="flex items-center gap-1 mb-1">
+                  <FaFileAlt className="text-blue-500 text-2xl" />
+                  {file.storage === "gridfs" ? (
+                    <FaCloud title="GridFS Storage" className="text-green-500" />
+                  ) : (
+                    <FaHdd title="Local Storage" className="text-gray-500" />
+                  )}
+                </div>
+                <span className="text-gray-700 text-sm truncate">{file.filename}</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleDownload(file._id, file.filename)}
+                    className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs"
+                  >
+                    Download
+                  </button>
+                  <button
+                    onClick={() => handlePreview(file._id, file.filename)}
+                    className="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs"
+                  >
+                    Preview
+                  </button>
+                  <button
+                    onClick={() => handleDeleteFile(file._id)}
+                    className="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
+
+      {/* ------------------ Preview Modal ------------------ */}
+      {previewFile && (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+      <div className="bg-white p-4 rounded w-3/4 h-3/4 overflow-auto">
+        <div className="flex justify-between items-center mb-2">
+          <h2 className="font-bold">{previewFile.name}</h2>
+          <button className="px-2 py-1 bg-red-600 text-white rounded"
+                  onClick={() => setPreviewFile(null)}>Close</button>
+        </div>
+
+        {previewFile.type === "image" && (
+          <img src={previewFile.url} alt={previewFile.name} className="w-full h-full object-contain" />
+        )}
+        {previewFile.type === "pdf" && (
+          <iframe src={previewFile.url} className="w-full h-full"></iframe>
+        )}
+        {previewFile.type === "text" && (
+          <pre className="overflow-auto text-sm">{previewFile.content}</pre>
+        )}
+      </div>
     </div>
+  )}
+
+      </div>
   );
 }
 
