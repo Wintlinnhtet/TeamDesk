@@ -36,5 +36,8 @@ export default function useRealtime(projectId, handlers = {}) {
     };
   }, [projectId]);
 
+
+
+  
   return sockRef; // so the page can join extra project rooms if needed
 }

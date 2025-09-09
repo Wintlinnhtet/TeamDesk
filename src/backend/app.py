@@ -274,6 +274,117 @@ def _safe_str_id(x):
         return str(x)
     except Exception:
         return None
+def _normalize_confirm_value(val):
+    if isinstance(val, bool):
+        return 1 if val else 0
+    try:
+        if isinstance(val, (int, float)):
+            return 1 if int(val) else 0
+    except Exception:
+        pass
+    if isinstance(val, str):
+        return 1 if val.strip().lower() in {"1", "true", "yes", "y", "on"} else 0
+    return 0
+
+def _safe_parse_experience(exp_value):
+    """
+    Accepts None / JSON string / list and returns a list.
+    """
+    if exp_value is None:
+        return []
+    if isinstance(exp_value, list):
+        return exp_value
+    if isinstance(exp_value, str):
+        try:
+            parsed = json.loads(exp_value)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+def _safe_serialize_experience(original_value, exp_list):
+    """
+    Preserve original type: if user had a JSON string, write back string; else write list.
+    """
+    if isinstance(original_value, str):
+        try:
+            return json.dumps(exp_list, ensure_ascii=False)
+        except Exception:
+            # last resort
+            return json.dumps([])
+    return exp_list
+# put this in app.py, replacing your previous _write_member_experience_for_confirmed_project
+def _write_member_experience_for_confirmed_project(pid: ObjectId):
+    """
+    On project confirm, write experience ONLY for users who had a task project_role.
+    - Do not add an entry that is just "Leader".
+    - If a user is the leader AND had a role, append " (Leader)" to that role.
+    - Skip users without any project_role on tasks.
+    """
+    proj = projects_collection.find_one({"_id": pid}, {"name": 1, "leader_id": 1})
+    if not proj:
+        return
+
+    proj_name = (proj.get("name") or "Untitled Project").strip()
+    leader_id = proj.get("leader_id")
+
+    # Collect roles per user from tasks (non-empty project_role only)
+    roles_by_user: dict[ObjectId, set[str]] = {}
+    try:
+        cur = tasks_collection.find(
+            {"$or": [{"project_id": pid}, {"project_id": str(pid)}]},
+            {"assignee_id": 1, "project_role": 1}
+        )
+        for t in cur:
+            role = (t.get("project_role") or "").strip()
+            if not role:
+                continue
+            aid = t.get("assignee_id")
+            try:
+                aid = aid if isinstance(aid, ObjectId) else ObjectId(str(aid))
+            except Exception:
+                continue
+            roles_by_user.setdefault(aid, set()).add(role)
+    except Exception:
+        return  # best-effort
+
+    when = datetime.utcnow()
+    for uid, roles in roles_by_user.items():
+        # Only write if the user actually has at least one role
+        if not roles:
+            continue
+        try:
+            u = users_collection.find_one({"_id": uid}, {"experience": 1})
+            current = _safe_load_experience(u.get("experience") if u else None)
+
+            is_leader = (leader_id == uid) if leader_id else False
+            for role in sorted(roles):
+                title = f"{role} (Leader)" if is_leader else role
+
+                # dedupe on (project, title)
+                exists = any(
+                    isinstance(item, dict)
+                    and item.get("project", "").strip().lower() == proj_name.lower()
+                    and item.get("title", "").strip().lower() == title.lower()
+                    for item in current
+                )
+                if exists:
+                    continue
+
+                current.append({
+                    "title": title,
+                    "project": proj_name,
+                    "time": _relative_month_label(when)
+                })
+
+            # store as JSON string (matches your existing schema)
+            users_collection.update_one(
+                {"_id": uid},
+                {"$set": {"experience": json.dumps(current, ensure_ascii=False)}}
+            )
+        except Exception:
+            # keep going for other users
+            continue
 
 @app.post("/add-member")
 def add_member():
@@ -864,7 +975,7 @@ def project_detail(project_id):
 
         old_status = (existing.get("status") or "").strip().lower()
         old_progress = int(existing.get("progress", 0) or 0)
-
+        old_confirm = int(existing.get("confirm",0)or 0)
         old_member_ids = existing.get("member_ids", [])
         old_set = set(old_member_ids)
         updates = {}
@@ -945,7 +1056,7 @@ def project_detail(project_id):
                 return jsonify({"error": "Project not found"}), 404
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
+        
         # Cascade: delete tasks of removed members
         if removed_member_oids:
             try:
@@ -974,7 +1085,12 @@ def project_detail(project_id):
                 recompute_and_store_project_progress(pid)
             except Exception:
                 pass
-
+        try:
+            new_confirm = int(updates.get("confirm", existing.get("confirm", 0)) or 0)
+            if old_confirm != 1 and new_confirm == 1:
+                _write_member_experience_for_confirmed_project(pid)
+        except Exception:
+            pass
         # Re-read final values after update
         final = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1, "status": 1})
         final_progress = int((final or {}).get("progress", 0) or 0)
@@ -1006,7 +1122,7 @@ def project_detail(project_id):
                 )
         except Exception:
             pass
-
+       
         # Response
         out = {"ok": True, "project_id": str(pid)}
         for k, v in updates.items():

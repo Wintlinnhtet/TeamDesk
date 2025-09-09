@@ -239,7 +239,7 @@ const [notifOpen, setNotifOpen] = useState(false);
 
   // Previous (completed) projects for timeline
   const prevProjects = projects
-    .filter(p => String(p.status || "").toLowerCase() === "complete" || Number(p.progress) >= 100)
+    .filter(p => String(p.confirm || "").toLowerCase() === "1" )
     .sort((a,b) => new Date(b.end_at || b.updated_at || b.created_at || 0) - new Date(a.end_at || a.updated_at || a.created_at || 0))
     .slice(0, 10);
 

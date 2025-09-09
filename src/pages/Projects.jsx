@@ -80,7 +80,7 @@ const Projects = () => {
         setMsg("Server error while fetching projects.");
       }
     })();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Complete button — sends actor headers + body so admin notification shows the actor
   const markComplete = async (e, projectId, projectName) => {
@@ -153,6 +153,10 @@ const Projects = () => {
             const hasTasks = info.hasTasks;
             const isLeader = p.leader_id === user?._id; // should be true with leader-only fetch
 
+            const statusNorm = String(p.status || "").toLowerCase();
+            const isComplete =
+              statusNorm === "complete" || statusNorm === "completed" || statusNorm === "done";
+
             return (
               <div
                 key={p._id}
@@ -168,7 +172,11 @@ const Projects = () => {
                   </div>
 
                   {/* Status badge */}
-                  {hasTasks ? (
+                  {isComplete ? (
+                    <span className="px-3 py-1 text-xs rounded-full bg-emerald-100 text-emerald-700 border border-emerald-200">
+                      Completed
+                    </span>
+                  ) : hasTasks ? (
                     <span className="px-3 py-1 text-xs rounded-full bg-green-300 text-black border border-green-300">
                       On progress
                     </span>
@@ -186,8 +194,12 @@ const Projects = () => {
                       title="Manage tasks"
                     >
                       {/* pencil icon */}
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"
-                           fill="currentColor" className="w-5 h-5 text-gray-700">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        className="w-5 h-5 text-gray-700"
+                      >
                         <path d="M3 14.25V17h2.75l8.1-8.1-2.75-2.75L3 14.25Zm12.71-7.96a.996.996 0 0 0 0-1.41l-1.59-1.59a.996.996 0 1 0-1.41 1.41l1.59 1.59c.39.39 1.02.39 1.41 0Z" />
                       </svg>
                     </button>
@@ -218,15 +230,19 @@ const Projects = () => {
                     )
                   )}
 
-                  {/* Right: complete (leaders only) */}
+                  {/* Right: Complete/Completed (leaders only) */}
                   {isLeader && (
                     <button
-                      onClick={(e) => markComplete(e, p._id, p.name)}
-                      className="px-3 py-2 rounded-lg text-sm border"
-                      style={{ borderColor: "#AA405B", color: "#AA405B" }}
-                      title="Mark complete"
+                      onClick={(e) => (isComplete ? e.preventDefault() : markComplete(e, p._id, p.name))}
+                      className={`px-3 py-2 rounded-lg text-sm border ${
+                        isComplete
+                          ? "cursor-not-allowed bg-emerald-100 text-emerald-700 border-emerald-200"
+                          : "bg-white text-[#AA405B] border-[#AA405B] hover:bg-[#AA405B] hover:text-white"
+                      }`}
+                      disabled={isComplete}
+                      title={isComplete ? "Already completed" : "Mark complete"}
                     >
-                      Complete
+                      {isComplete ? "Completed" : "Complete"}
                     </button>
                   )}
                 </div>

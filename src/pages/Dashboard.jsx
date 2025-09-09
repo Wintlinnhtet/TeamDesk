@@ -1,3 +1,4 @@
+// src/frontend/components/Dashboard.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
@@ -17,13 +18,7 @@ const Dashboard = () => {
   const [msg, setMsg] = useState("");
 
   const initials = (name = "") =>
-    name
-      .trim()
-      .split(/\s+/)
-      .map((s) => s[0])
-      .slice(0, 2)
-      .join("")
-      .toUpperCase();
+    name.trim().split(/\s+/).map((s) => s[0]).slice(0, 2).join("").toUpperCase();
 
   // 1) Fast lookup: projectId -> project
   const projectsById = useMemo(() => {
@@ -50,7 +45,7 @@ const Dashboard = () => {
   const dayLabel = `${today.getDate()}, ${today.toLocaleString("en-US", { weekday: "short" })}`;
 
   // Normalize experience (can be array or JSON string from backend)
-  const normalizedExperience = useMemo(() => {
+  const normalizedExperienceAll = useMemo(() => {
     if (Array.isArray(experience)) return experience;
     if (typeof experience === "string") {
       try {
@@ -62,6 +57,23 @@ const Dashboard = () => {
     }
     return [];
   }, [experience]);
+
+  // NEW: filter experience to only projects with confirm:1 (match by project name)
+  const confirmedExperience = useMemo(() => {
+    if (!projects?.length) return [];
+    // Build a case-insensitive set of confirmed project names
+    const confirmedNames = new Set(
+      projects
+        .filter((p) => Number(p?.confirm || 0) === 1)
+        .map((p) => String(p?.name || "").trim().toLowerCase())
+    );
+    if (confirmedNames.size === 0) return [];
+    // Keep only experience entries whose project name is in that set
+    return normalizedExperienceAll.filter((exp) => {
+      const pname = String(exp?.project || "").trim().toLowerCase();
+      return pname && confirmedNames.has(pname);
+    });
+  }, [projects, normalizedExperienceAll]);
 
   // Fetch OPEN tasks only (todo + in_progress). Fallback: all then filter.
   const loadOpenTasksForUser = async (uid) => {
@@ -123,7 +135,7 @@ const Dashboard = () => {
         if (uRes.ok) setExperience(uData.experience ?? []);
         else console.warn("get-user failed:", uData);
 
-        // 2) Projects where I'm leader or member
+        // 2) Projects where I'm leader or member (must include confirm field from backend)
         const pRes = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
         const pData = await pRes.json();
         if (pRes.ok) setProjects(Array.isArray(pData) ? pData : []);
@@ -142,7 +154,6 @@ const Dashboard = () => {
   // Derive "my role" per project (kept for future use if you show roles anywhere)
   const roleByProject = useMemo(() => {
     const map = {};
-    // If you need roles from ANY task (not only open), you may need a separate fetch.
     for (const t of tasks) {
       if (t.project_role && !map[t.project_id]) {
         map[t.project_id] = t.project_role;
@@ -231,24 +242,18 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Previous Experience (ALL entries) */}
+          {/* Previous Experience — FILTERED by confirm:1 */}
           <div className="flex w-full space-x-4 mt-6">
             <div className="w-1/2 bg-white p-4 rounded-xl shadow-md relative">
               <h2 className="text-lg font-semibold text-gray-800 mb-4 ml-8">Previous Experience</h2>
-              <div
-                className="absolute left-2 top-5 bottom-4 w-0.5 z-0 ml-6"
-                style={{ backgroundColor: customColor }}
-              />
-              {normalizedExperience.length === 0 ? (
-                <div className="ml-8 text-gray-500">No experience added.</div>
+              <div className="absolute left-2 top-5 bottom-4 w-0.5 z-0 ml-6" style={{ backgroundColor: customColor }} />
+              {confirmedExperience.length === 0 ? (
+                <div className="ml-8 text-gray-500">No experience from confirmed projects.</div>
               ) : (
                 <div className="space-y-5 ml-8">
-                  {normalizedExperience.map((exp, i) => (
+                  {confirmedExperience.map((exp, i) => (
                     <div key={i} className="relative pl-6 z-10">
-                      <div
-                        className="absolute left-0 top-1 w-3 h-3 rounded-full"
-                        style={{ backgroundColor: customColor }}
-                      />
+                      <div className="absolute left-0 top-1 w-3 h-3 rounded-full" style={{ backgroundColor: customColor }} />
                       <h3 className="font-semibold text-sm text-gray-800">
                         🧑‍💻 {exp?.title || "—"}
                       </h3>
@@ -278,17 +283,8 @@ const Dashboard = () => {
                 ].map((item, index) => (
                   <div key={index} className="flex justify-between items-start mb-3">
                     <div className="flex items-start space-x-2">
-                      <div
-                        className="w-5 h-5 rounded-full flex items-center justify-center mt-1"
-                        style={{ backgroundColor: customColor }}
-                      >
-                        <svg
-                          className="w-3 h-3 text-white"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="3"
-                          viewBox="0 0 24 24"
-                        >
+                      <div className="w-5 h-5 rounded-full flex items-center justify-center mt-1" style={{ backgroundColor: customColor }}>
+                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
@@ -326,14 +322,8 @@ const Dashboard = () => {
                   <div className="text-center text-sm text-gray-500">No upcoming tasks</div>
                 ) : (
                   upcomingWithProject.slice(0, 4).map((t) => (
-                    <div
-                      key={t._id}
-                      className="flex justify-between p-2 bg-white rounded-lg shadow-md relative"
-                    >
-                      <div
-                        className="absolute left-0 top-0 h-full w-2"
-                        style={{ backgroundColor: customColor }}
-                      />
+                    <div key={t._id} className="flex justify-between p-2 bg-white rounded-lg shadow-md relative">
+                      <div className="absolute left-0 top-0 h/full w-2" style={{ backgroundColor: customColor }} />
                       <span className="pr-3 font-medium" style={{ color: customColor }}>
                         {t.title}
                       </span>
