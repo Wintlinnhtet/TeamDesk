@@ -1,6 +1,6 @@
 from flask import  Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from .database import db
+from database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from datetime import datetime
@@ -9,6 +9,7 @@ from flask_socketio import SocketIO, emit, join_room, leave_room
 import re
 from werkzeug.utils import secure_filename
 import os
+from profile_backend import profile_bp
 # near other imports
 
 from bson import ObjectId
@@ -29,9 +30,9 @@ from backend.database import get_db
 
 
 app = Flask(__name__)
+CORS(app)  # Your existing CORS setup //y2
 
-
-
+app.register_blueprint(profile_bp)
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
 SERVER_IP = "192.168.1.5"
 
