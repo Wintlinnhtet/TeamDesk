@@ -3,20 +3,38 @@ import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 
+function readCurrentUser() {
+  try {
+    const ls = JSON.parse(localStorage.getItem("user") || "null");
+    const ss = JSON.parse(sessionStorage.getItem("user") || "null");
+    const raw = ls?.user || ls || ss?.user || ss || null;
+    if (!raw) return null;
+    return {
+      id: String(raw._id || raw.id || ""),
+      name: String(raw.name || raw.email || ""),
+      raw,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function actorHeaders() {
+  const u = readCurrentUser();
+  const h = {};
+  if (u?.id) h["X-Actor-Id"] = u.id;
+  if (u?.name) h["X-Actor-Name"] = u.name;
+  return h;
+}
+
 const Projects = () => {
   const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState({}); // { [projectId]: { hasTasks: boolean, count: number } }
   const [msg, setMsg] = useState("");
   const navigate = useNavigate();
 
-  // Helper to read current user
-  const getUser = () => {
-    try {
-      return JSON.parse(localStorage.getItem("user") || "null");
-    } catch {
-      return null;
-    }
-  };
+  // Helper to read current user for rendering
+  const getUser = () => readCurrentUser()?.raw || null;
 
   // 1) Load projects where the logged-in user is the LEADER
   useEffect(() => {
@@ -64,25 +82,34 @@ const Projects = () => {
     })();
   }, []);
 
-  // Complete button (optional – wire to PATCH /projects/:id if you added it)
+  // Complete button — sends actor headers + body so admin notification shows the actor
   const markComplete = async (e, projectId, projectName) => {
     e.stopPropagation();
     if (!window.confirm(`Mark "${projectName}" as complete?`)) return;
 
-    // If you've implemented PATCH /projects/<id> in your backend:
+    const actor = readCurrentUser();
     try {
       const res = await fetch(`${API_BASE}/projects/${projectId}`, {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ status: "complete", progress: 100 }),
+        headers: {
+          "Content-Type": "application/json",
+          ...actorHeaders(), // X-Actor-Id / X-Actor-Name
+        },
+        body: JSON.stringify({
+          status: "complete",
+          progress: 100,
+          // also include in body as a fallback for _actor_from_request
+          updated_by: actor?.id || null,
+          updated_by_name: actor?.name || null,
+        }),
       });
       if (!res.ok) {
         const t = await res.text().catch(() => "");
         throw new Error(`${res.status} ${t}`);
       }
 
-      // Optimistic local update (status/progress) if desired:
+      // Optimistic local update (status/progress)
       setProjects((prev) =>
         prev.map((p) =>
           p._id === projectId ? { ...p, status: "complete", progress: "100" } : p
@@ -124,7 +151,7 @@ const Projects = () => {
           {projects.map((p) => {
             const info = stats[p._id] || { hasTasks: false, count: 0 };
             const hasTasks = info.hasTasks;
-            const isLeader = p.leader_id === user?._id; // should always be true with leader-only fetch
+            const isLeader = p.leader_id === user?._id; // should be true with leader-only fetch
 
             return (
               <div
@@ -175,7 +202,6 @@ const Projects = () => {
                   {/* Left: Assign/continue (leaders only) */}
                   {isLeader && (
                     info.count > 0 ? (
-                      // Already has tasks → add more via select mode
                       <button
                         onClick={(e) => goAssign(e, p._id, true)}
                         className="px-4 py-2 rounded bg-[#AA405B] text-white"
@@ -183,7 +209,6 @@ const Projects = () => {
                         Add more tasks
                       </button>
                     ) : (
-                      // No tasks yet → start sequential flow
                       <button
                         onClick={(e) => goAssign(e, p._id)}
                         className="px-4 py-2 rounded bg-[#AA405B] text-white"
@@ -193,7 +218,7 @@ const Projects = () => {
                     )
                   )}
 
-                  {/* Right: complete (leaders only; requires PATCH backend to persist) */}
+                  {/* Right: complete (leaders only) */}
                   {isLeader && (
                     <button
                       onClick={(e) => markComplete(e, p._id, p.name)}

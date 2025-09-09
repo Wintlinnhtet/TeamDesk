@@ -63,14 +63,17 @@ def on_leave(data):
     pid = data.get("projectId")
     if pid:
         leave_room(pid)
+# after FRONTEND_ORIGINS
+ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name"]
 
 CORS(
     app,
     resources={r"/*": {"origins": FRONTEND_ORIGINS}},
     supports_credentials=True,
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=ALLOWED_HEADERS,
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
+
 
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
@@ -614,7 +617,7 @@ def recompute_and_store_project_progress(project_id_any) -> int:
         _notify_admins(
             kind="project_progress_changed",
             title=f"Project progress updated: {proj_name or pid_str}",
-            body=f"{uname} set progress to {pct}% (was {old_pct}%).",
+            body=f"Progress to {pct}% (was {old_pct}%).",
             data={"project_id": pid_str, "project_name": proj_name, "from": old_pct, "to": pct}
         )
 
@@ -761,6 +764,7 @@ def projects():
                     "end_at": p.get("end_at"),
                     "progress": int(p.get("progress", 0)),  # numeric
                     "status": p.get("status", "todo"),
+                    "confirm": int(p.get("confirm", 0)),
                 })
             return jsonify(out)
         except Exception as e:
@@ -849,6 +853,7 @@ def project_detail(project_id):
             "end_at": proj.get("end_at"),
             "progress": int(proj.get("progress", 0)),
             "status": proj.get("status", "todo"),
+            "confirm": int(proj.get("confirm",0)),
         })
 
     if request.method == "PATCH":
@@ -912,6 +917,22 @@ def project_detail(project_id):
             if raw_status not in allowed:
                 return jsonify({"error": "Invalid status"}), 400
             updates["status"] = raw_status
+    # ---- confirm toggle (0/1) ----
+        if "confirm" in data:
+            raw = data.get("confirm")
+            val = 0
+            try:
+                # allow 1/0, "1"/"0", true/false, "true"/"false"
+                if isinstance(raw, str):
+                    s = raw.strip().lower()
+                    if s in ("1", "true", "yes", "y", "on"): val = 1
+                    elif s in ("0", "false", "no", "n", "off"): val = 0
+                    elif s.isdigit(): val = 1 if int(s) != 0 else 0
+                elif isinstance(raw, (int, float, bool)):
+                    val = 1 if int(raw) != 0 else 0
+            except Exception:
+                val = 0
+            updates["confirm"] = int(val)
 
         if not updates:
             return jsonify({"error": "No changes"}), 400
@@ -1281,7 +1302,7 @@ def task_detail(task_id):
                 notify_admins(
                     kind="task_completed",
                     title=f"Task completed • {proj_name}",
-                    body=f"{actor_name} marked '{title_now}' as complete. Assignee: {assignee_label}.",
+                    body=f"{actor_name} marked '{title_now}' as complete.",
                     data={
                         "project_id": str(project_id),
                         "task_id": str(tid),

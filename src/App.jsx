@@ -20,7 +20,7 @@ import Register from './components/Register';
 import ProjectTasks from './pages/ProjectTasks';
 import TaskDetail from './pages/TaskDetail';
 import AllProjects from './pages/AllProjects';
-import ActivityFeed from './components/ActivityFeed';
+
 import AnnouncementDetail from "./pages/AnnouncementDetail";
 import EditAnnouncement from "./pages/EditAnnouncement";
 
