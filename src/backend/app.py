@@ -152,12 +152,14 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
         except Exception:
             pass
 
+# replace your _notify_users with this
 def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
     """
-    Try backend.notifier.send_to_users; if not available, write records for each user.
+    Try backend.notifier.notify_users; if not available, write records for each user.
     """
     try:
-        send_to_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
+        # this is the function you actually imported at the top
+        notify_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
@@ -181,12 +183,39 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
         except Exception:
             pass
 
-
 def to_object_id(id_str):
     try:
         return ObjectId(id_str)
     except Exception:
         return None
+# --- helpers to filter self-notifications ------------------------------------
+ADMIN_ROLES = {"admin", "owner", "superadmin"}
+
+def _is_admin_user(user_id: ObjectId | None) -> bool:
+    if not user_id:
+        return False
+    try:
+        u = users_collection.find_one({"_id": user_id}, {"role": 1})
+        return (u or {}).get("role") in ADMIN_ROLES
+    except Exception:
+        return False
+
+def _notify_admins_excluding_actor(*, kind: str, title: str, body: str, data: dict | None = None, actor_id: ObjectId | None = None):
+    """
+    Notify all admins EXCEPT the actor (if the actor is an admin).
+    Falls back to writing docs if notifier isn't available.
+    """
+    if actor_id and _is_admin_user(actor_id):
+        # manual fan-out, excluding actor
+        ids = [u["_id"] for u in users_collection.find(
+            {"role": {"$in": list(ADMIN_ROLES)}, "_id": {"$ne": actor_id}},
+            {"_id": 1}
+        )]
+        _notify_users(ids, kind=kind, title=title, body=body, data=data or {})
+        return
+
+    # otherwise use the normal admin-notify path
+    _notify_admins(kind=kind, title=title, body=body, data=data or {})
 
 # ---------- make ALL preflights succeed ----------
 @app.before_request
@@ -301,6 +330,18 @@ def _safe_parse_experience(exp_value):
         except Exception:
             return []
     return []
+def _id_to_str(x):
+    if isinstance(x, ObjectId):
+        return str(x)
+    if isinstance(x, dict) and "$oid" in x:
+        return str(x["$oid"])
+    if x is None:
+        return None
+    s = str(x)
+    try:
+        return str(ObjectId(s))
+    except Exception:
+        return s
 
 def _safe_serialize_experience(original_value, exp_list):
     """
@@ -669,73 +710,105 @@ def _coerce_pct_from_task(task: dict) -> int:
         return n_pct
     return s_pct if s_pct > 0 else 0
 
-def recompute_and_store_project_progress(project_id_any) -> int:
+def recompute_and_store_project_progress(project_oid):
     """
-    Compute mean of task percentages for a project, persist to projects.progress,
-    broadcast via socket, and notify admins if the value actually changed.
+    Recompute project.progress from tasks, store it, and notify:
+      - admins (already done below)
+      - leader
+      - members (excluding leader and the actor who caused the change)
     """
-    pid = _as_object_id(project_id_any)
+    pid = project_oid if isinstance(project_oid, ObjectId) else to_object_id(project_oid)
     if not pid:
-        return 0
-    pid_str = str(pid)
+        return
 
-    # fetch current project for name + old progress
-    proj = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1})
-    proj_name = (proj or {}).get("name", "")
-    old_pct = int((proj or {}).get("progress", 0) or 0)
-
-    or_terms = [
-        {"project_id": pid}, {"project_id": pid_str},
-        {"projectId": pid},  {"projectId": pid_str},
-        {"project._id": pid},{"project._id": pid_str},
-        {"project.id": pid}, {"project.id": pid_str},
-        {"$expr": {"$eq": [{"$toString": "$project_id"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$projectId"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$project._id"}, pid_str]}},
-        {"$expr": {"$eq": [{"$toString": "$project.id"}, pid_str]}}
-    ]
-
-    tasks = list(tasks_collection.find(
-        {"$or": or_terms},
-        {"status": 1, "state": 1, "progress": 1, "percent": 1, "percentage": 1,
-         "progress_pct": 1, "completion": 1, "complete_percent": 1}
-    ))
-
+    # 1) Load tasks and compute new percentage
+    tasks = list(tasks_collection.find({"project_id": {"$in": [pid, str(pid)]}}))
     if not tasks:
-        pct = 0
+        new_pct = 0
     else:
-        vals = [_coerce_pct_from_task(t) for t in tasks]
-        pct = round(sum(vals) / len(vals)) if vals else 0
+        vals = []
+        for t in tasks:
+            try:
+                vals.append(int(t.get("progress", 0) or 0))
+            except Exception:
+                vals.append(0)
+        new_pct = int(round(sum(vals) / max(1, len(vals))))
 
-    pct = int(max(0, min(100, pct)))
-
-    projects_collection.update_one(
+    # 2) Fetch the project (name/leader/member_ids/progress/status)
+    proj = projects_collection.find_one(
         {"_id": pid},
-        {"$set": {"progress": pct, "updated_at": datetime.utcnow()}}
+        {"name": 1, "leader_id": 1, "member_ids": 1, "progress": 1, "status": 1}
     )
+    if not proj:
+        return
 
-    # broadcast to project room
-    socketio.emit(
-        "project:progress",
-        {"project_id": pid_str, "progress": pct},
-        namespace="/rt",
-        to=pid_str
-    )
+    old_pct = int(proj.get("progress", 0) or 0)
+    if new_pct == old_pct:
+        return  # nothing changed → nothing to notify
 
-    # notify admins only if this is a real change
-    if pct != old_pct:
-        uid, uname = _actor_from_request()  # best-effort
-        _notify_admins(
+    # 3) Persist the new progress
+    projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.utcnow()}})
+
+    # 4) Actor (from headers/body) for exclusion in notifications
+    try:
+        actor_id, actor_name = _actor_from_request(request.get_json(silent=True) or {})
+    except Exception:
+        actor_id, actor_name = (None, None)
+
+    actor_id_str  = _id_to_str(actor_id)
+    leader_id_str = _id_to_str(proj.get("leader_id"))
+
+    # Build member recipients (exclude leader and actor)
+    member_ids = proj.get("member_ids", []) or []
+    member_recips = []
+    for mid in member_ids:
+        ms = _id_to_str(mid)
+        if not ms:
+            continue
+        if leader_id_str and ms == leader_id_str:
+            continue
+        if actor_id_str and ms == actor_id_str:
+            continue
+        member_recips.append(ms)
+
+    pname = proj.get("name", "")
+
+    # 5) Notify admins
+    try:
+        notify_admins(
             kind="project_progress_changed",
-            title=f"Project progress updated: {proj_name or pid_str}",
-            body=f"Progress to {pct}% (was {old_pct}%).",
-            data={"project_id": pid_str, "project_name": proj_name, "from": old_pct, "to": pct}
+            title=f"Project progress updated: {pname}",
+            body=f"{actor_name or 'Someone'} set progress to {new_pct}% (was {old_pct}%).",
+            data={"project_id": str(pid), "project_name": pname, "from": old_pct, "to": new_pct},
         )
+    except Exception:
+        pass
 
-  
-       
+    # 6) Notify leader (if not the actor)
+    try:
+        if leader_id_str and leader_id_str != actor_id_str:
+            notify_users(
+                [leader_id_str],
+                kind="project_progress_changed",
+                title=f"Project progress updated • {pname}",
+                body=f"{actor_name or 'Someone'} set progress to {new_pct}% (was {old_pct}%).",
+                data={"project_id": str(pid), "project_name": pname, "from": old_pct, "to": new_pct},
+            )
+    except Exception:
+        pass
 
-    return pct
+    # 7) Notify members (exclude leader & actor)
+    try:
+        if member_recips:
+            notify_users(
+                member_recips,
+                kind="project_progress_changed",
+                title=f"Project progress updated • {pname}",
+                body=f"{actor_name or 'Someone'} set progress to {new_pct}% (was {old_pct}%).",
+                data={"project_id": str(pid), "project_name": pname, "from": old_pct, "to": new_pct},
+            )
+    except Exception:
+        pass
 
 # -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
@@ -837,7 +910,6 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
         for r in roles:
             _append_experience(uid, r, project_name, when)
 
-# -------------------- PROJECTS (GET list + POST create) --------------------
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
     if request.method == "GET":
@@ -873,15 +945,15 @@ def projects():
                     "leader_id": str(p.get("leader_id")) if p.get("leader_id") else None,
                     "start_at": p.get("start_at"),
                     "end_at": p.get("end_at"),
-                    "progress": int(p.get("progress", 0)),  # numeric
+                    "progress": int(p.get("progress", 0)),
                     "status": p.get("status", "todo"),
                     "confirm": int(p.get("confirm", 0)),
                 })
-            return jsonify(out)
+            return jsonify(out), 200
         except Exception as e:
             return jsonify({"error": str(e)}), 500
 
-    # POST create
+    # ----- POST (create) -----
     data = request.get_json() or {}
     name = (data.get("name") or "").strip()
     description = (data.get("description") or "").strip()
@@ -891,14 +963,12 @@ def projects():
     if not name:
         return jsonify({"error": "Project name is required"}), 400
 
-    # progress default numeric 0..100
     try:
         prog_num = int(str(data.get("progress", 0)).strip())
     except Exception:
         prog_num = 0
     prog_num = max(0, min(100, prog_num))
 
-    # status normalization
     raw_status = (data.get("status") or "").strip().lower()
     allowed = {"todo", "in_progress", "complete", "completed", "done"}
     status = raw_status if raw_status in allowed else "todo"
@@ -913,20 +983,43 @@ def projects():
         "start_at": data.get("start_at"),
         "end_at": data.get("end_at"),
         "created_at": datetime.utcnow(),
-        "progress": int(prog_num),   # numeric
+        "progress": int(prog_num),
         "status": status,
+        "confirm": int(_normalize_confirm_value(data.get("confirm", 0))),  # keep numeric 0/1 if provided
     }
 
+    # write to DB
     try:
         ins = projects_collection.insert_one(doc)
-        return jsonify({
-            "message": "Project created",
-            "project_id": str(ins.inserted_id),
-            "progress": int(prog_num),
-            "status": status,
-        }), 201
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+    # notify assigned leader (if any)
+    try:
+        actor_id, actor_name = _actor_from_request(data)
+        if doc.get("leader_id"):
+            _notify_users(
+                [doc["leader_id"]],
+                kind="you_were_made_leader",
+                title=f"You were assigned as leader • {doc.get('name','Untitled project')}",
+                body=f"{actor_name or 'An admin'} made you the leader.",
+                data={
+                    "project_id": str(ins.inserted_id),
+                    "project_name": doc.get("name",""),
+                    "actor_id": (str(actor_id) if actor_id else None),
+                    "actor_name": actor_name,
+                },
+            )
+    except Exception:
+        pass
+
+    return jsonify({
+        "message": "Project created",
+        "project_id": str(ins.inserted_id),
+        "progress": int(prog_num),
+        "status": status,
+        "confirm": doc.get("confirm", 0),
+    }), 201
 
 # --- PROJECT (read one + patch + delete) ---
 @app.route("/projects/<project_id>", methods=["GET", "PATCH", "DELETE"])
@@ -966,13 +1059,14 @@ def project_detail(project_id):
             "status": proj.get("status", "todo"),
             "confirm": int(proj.get("confirm",0)),
         })
+ 
 
     if request.method == "PATCH":
         # load old values first
         existing = projects_collection.find_one({"_id": pid})
         if not existing:
             return jsonify({"error": "Project not found"}), 404
-
+        prev_leader_id = existing.get("leader_id") 
         old_status = (existing.get("status") or "").strip().lower()
         old_progress = int(existing.get("progress", 0) or 0)
         old_confirm = int(existing.get("confirm",0)or 0)
@@ -1085,17 +1179,59 @@ def project_detail(project_id):
                 recompute_and_store_project_progress(pid)
             except Exception:
                 pass
+      # already present:
         try:
             new_confirm = int(updates.get("confirm", existing.get("confirm", 0)) or 0)
             if old_confirm != 1 and new_confirm == 1:
                 _write_member_experience_for_confirmed_project(pid)
+
+                # ✅ notify members (not the leader) that the project is approved
+                try:
+                    final_for_notif = projects_collection.find_one(
+                        {"_id": pid},
+                        {"name":1, "member_ids":1, "leader_id":1}
+                    )
+                    pname = (final_for_notif or {}).get("name","")
+                    leader_id = (final_for_notif or {}).get("leader_id")
+                    recipients = []
+                    for uid in (final_for_notif or {}).get("member_ids", []):
+                        try:
+                            uoid = uid if isinstance(uid, ObjectId) else ObjectId(str(uid))
+                        except Exception:
+                            continue
+                        if leader_id and uoid == leader_id:
+                            continue  # exclude leader; they already get their own noti
+                        recipients.append(uoid)
+                    if recipients:
+                        _notify_users(
+                            recipients,
+                            kind="project_confirmed",
+                            title=f"Project approved • {pname}",
+                            body="Your whole project is complete and approved by company.",
+                            data={"project_id": str(pid), "project_name": pname},
+                        )
+                    if leader_id:
+                        _notify_users(
+                            [leader_id],
+                            kind="project_confirmed",
+                            title=f"Project approved • {pname}",
+                            body="Your whole project is complete and approved by company.",
+                            data={"project_id": str(pid), "project_name": pname},
+                        )
+                except Exception:
+                    pass
         except Exception:
             pass
+
         # Re-read final values after update
-        final = projects_collection.find_one({"_id": pid}, {"name": 1, "progress": 1, "status": 1})
+        final = projects_collection.find_one(
+            {"_id": pid},
+            {"name": 1, "progress": 1, "status": 1, "leader_id": 1, "member_ids": 1}  # ⬅️ add leader_id & member_ids
+        )
         final_progress = int((final or {}).get("progress", 0) or 0)
         final_status = (final or {}).get("status", "").strip().lower()
         proj_name = (final or {}).get("name", "")
+        new_leader_id = (final or {}).get("leader_id")
 
         # Notify admins (progress change / completion)
         try:
@@ -1122,7 +1258,90 @@ def project_detail(project_id):
                 )
         except Exception:
             pass
-       
+        # ✅ Members: progress changed (exclude leader & actor)
+       # ✅ Members: progress changed (exclude leader & actor)
+        try:
+            if final_progress != old_progress:
+                actor_id, actor_name = _actor_from_request(data)
+
+                def _to_str_id(x):
+                    if isinstance(x, ObjectId):
+                        return str(x)
+                    # try coercing to ObjectId then back to string; if it fails, just str()
+                    try:
+                        return str(ObjectId(str(x)))
+                    except Exception:
+                        return str(x) if x is not None else None
+
+                leader_id_str = _to_str_id((final or {}).get("leader_id"))
+                actor_id_str  = _to_str_id(actor_id)
+
+                member_ids = (final or {}).get("member_ids", []) or []
+                recipients = []
+                for mid in member_ids:
+                    ms = _to_str_id(mid)
+                    if not ms:
+                        continue
+                    if leader_id_str and ms == leader_id_str:  # exclude leader
+                        continue
+                    if actor_id_str and ms == actor_id_str:    # exclude actor
+                        continue
+                    recipients.append(ms)
+
+                if recipients:
+                    notify_users(
+                        recipients,
+                        kind="project_progress_changed",
+                        title=f"Project progress updated • {proj_name}",
+                        body=f"Progress to {final_progress}% (was {old_progress}%).",
+                        data={
+                            "project_id": str(pid),
+                            "project_name": proj_name,
+                            "from": old_progress,
+                            "to": final_progress,
+                        },
+                    )
+        except Exception:
+            pass
+
+
+        try:
+            actor_id, actor_name = _actor_from_request(data)
+
+            # If leader changed, notify new leader (and optionally the old one)
+            new_leader_id = (final or {}).get("leader_id")
+            if new_leader_id and new_leader_id != prev_leader_id:
+                _notify_users(
+                    [new_leader_id],
+                    kind="you_were_made_leader",
+                    title=f"You were assigned as leader • {proj_name}",
+                    body=f"{actor_name or 'Someone'} assigned you as the project leader.",
+                    data={"project_id": str(pid), "project_name": proj_name},
+                )
+            # (optional) let the old leader know they were removed
+            if prev_leader_id and prev_leader_id != new_leader_id:
+                _notify_users(
+                    [prev_leader_id],
+                    kind="you_were_removed_as_leader",
+                    title=f"Leadership changed • {proj_name}",
+                    body=f"{actor_name or 'Someone'} replaced you as the project leader.",
+                    data={"project_id": str(pid), "project_name": proj_name},
+                )
+
+            # If progress changed, ping the current leader (same event admins get)
+            if new_leader_id and final_progress != old_progress:
+                _notify_users(
+                    [new_leader_id],
+                    kind="project_progress_changed",
+                    title=f"Project progress updated • {proj_name}",
+                    body=f"Progress to {final_progress}% (was {old_progress}%).",
+                    data={"project_id": str(pid), "project_name": proj_name, "from": old_progress, "to": final_progress},
+                )
+
+            # If it became complete, ping the leader too (admins already notified)
+            
+        except Exception:
+            pass
         # Response
         out = {"ok": True, "project_id": str(pid)}
         for k, v in updates.items():
@@ -1138,15 +1357,16 @@ def project_detail(project_id):
 
         return jsonify(out), 200
 
-    # DELETE
+        # DELETE
     res = projects_collection.delete_one({"_id": pid})
     if res.deleted_count == 0:
         return jsonify({"error": "Project not found"}), 404
     try:
-        tasks_collection.delete_many({"project_id": pid})
+        tasks_collection.delete_many({"project_id": {"$in": [pid, str(pid)]}})
     except Exception:
         pass
     return jsonify({"ok": True, "deleted_id": str(pid)}), 200
+
 
 # -------------------- TASKS (LIST + CREATE) --------------------
 @app.route("/tasks", methods=["GET", "POST"])
@@ -1267,16 +1487,28 @@ def tasks_collection_handler():
             data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
         )
 
-        # optional: notify the assignee
-        notify_users(
-            [aid],
-            kind="you_were_assigned",
-            title=f"New task in {proj_name}",
-            body=f"You were assigned: {title}",
-            data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
-        )
+        if aid and (not creator_id or aid != creator_id):
+            notify_users(
+                [aid],
+                kind="you_were_assigned",
+                title=f"New task in {proj_name}",
+                body=f"You were assigned: {title}",
+                data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
+            )
+
+# notify the leader (not if leader is assignee, and not if leader is the actor)
+        leader_id = (proj or {}).get("leader_id")
+        if leader_id and leader_id != aid and (not creator_id or leader_id != creator_id):
+            notify_users(
+                [leader_id],
+                kind="task_assigned_in_your_project",
+                title=f"Task assigned • {proj_name}",
+                body=f"{assignee_name} was assigned: {title}",
+                data={"project_id": str(pid), "task_id": str(ins.inserted_id)},
+            )
     except Exception:
-        pass
+            pass
+   
 
     return jsonify({"message": "Task created", **payload}), 201
 
@@ -1365,6 +1597,64 @@ def task_detail(task_id):
         updates["updated_at"] = datetime.utcnow()
 
         result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
+        try:
+            actor_id, actor_name = _actor_from_request(data)
+            # read fresh values
+           # was: {"title":1,"project_id":1,"status":1,"progress":1}
+            t2 = tasks_collection.find_one({"_id": tid}, {
+                "title": 1, "project_id": 1, "status": 1, "progress": 1, "assignee_id": 1  # ⬅️ add assignee_id
+            })
+            # was: {"leader_id":1, "name":1}
+            proj = projects_collection.find_one({"_id": t2["project_id"]}, {
+                "leader_id": 1, "name": 1, "member_ids": 1  # ⬅️ add member_ids
+            })
+
+            leader_id = (proj or {}).get("leader_id")
+            proj_name = (proj or {}).get("name","")
+            changed_for_notify = (
+            ("progress" in updates and int(updates["progress"]) != int(prev_progress)) or
+            ("status"   in updates and (updates["status"] or "").strip().lower() != prev_status)
+        )
+
+            if leader_id and leader_id != actor_id and changed_for_notify:
+                notify_users(
+                    [leader_id],
+                    kind="member_task_progress_changed",
+                    title=f"Task updated • {proj_name}",
+                    body=f"{actor_name or 'Someone'} set '{t2.get('title','Task')}' to "
+                        f"{int(t2.get('progress') or 0)}% ({(t2.get('status') or 'todo').lower()}).",
+                    data={"project_id": str(t2["project_id"]), "task_id": str(tid)},
+                )
+
+        # ✅ members notify (exclude leader, actor, and — if actor is the assignee — themselves)
+        # ✅ members notify (exclude leader, actor, and — if actor is the assignee — themselves)
+            if changed_for_notify and proj:
+                recipients = []
+                for uid in (proj.get("member_ids") or []):
+                    try:
+                        uoid = uid if isinstance(uid, ObjectId) else ObjectId(str(uid))
+                    except Exception:
+                        continue
+                    if leader_id and uoid == leader_id:
+                        continue                  # not the leader
+                    if actor_id and uoid == actor_id:
+                        continue                  # not the actor
+                    if t2.get("assignee_id") and uoid == t2["assignee_id"] and actor_id and actor_id == t2["assignee_id"]:
+                        continue                  # actor updated their own task → don't notify them
+                    recipients.append(uoid)
+
+                if recipients:
+                    _notify_users(
+                        recipients,
+                        kind="member_task_progress_changed",
+                        title=f"Task updated • {proj_name}",
+                        body=f"{actor_name or 'Someone'} set '{t2.get('title','Task')}' to "
+                            f"{int(t2.get('progress') or 0)}% ({(t2.get('status') or 'todo').lower()}).",
+                        data={"project_id": str(t2["project_id"]), "task_id": str(tid)},
+                    )
+
+        except Exception:
+            pass
         if result.modified_count == 0:
             return jsonify({"error": "No changes were made"}), 400
 
@@ -1384,50 +1674,55 @@ def task_detail(task_id):
         recompute_and_store_project_progress(project_id)
 
           # ---- ADMIN NOTIFY: task progress / completion (now that DB is updated) ----
+               # ---- ADMIN NOTIFY: task progress / completion (after DB is updated) ----
         try:
             actor_id, actor_name = _actor_from_request(data)
 
-            # derive new values from patch or previous doc
+            # derive new values
             new_status = (patch.get("status") or t.get("status") or "").strip().lower()
             new_progress = int(patch.get("progress") if patch.get("progress") is not None else (t.get("progress") or 0))
+            done_set = {"complete", "completed", "done", "finished"}
+            just_completed = (prev_progress < 100 and new_progress >= 100) or \
+                             (prev_status not in done_set and new_status in done_set)
 
+            # labels
             proj = projects_collection.find_one({"_id": project_id}, {"name": 1})
             proj_name = (proj or {}).get("name", "")
             title_now = patch.get("title") or t.get("title", "")
+            assignee_label = ""
+            try:
+                assignee = users_collection.find_one({"_id": t.get("assignee_id")}, {"name": 1, "email": 1})
+                assignee_label = (assignee or {}).get("name") or (assignee or {}).get("email") or ""
+            except Exception:
+                pass
 
+            # progress changed -> notify admins (exclude actor if actor is admin)
             if new_progress != prev_progress:
-                notify_admins(
+                _notify_admins_excluding_actor(
                     kind="task_progress_changed",
                     title=f"Task progress • {proj_name}",
-                    body=f"{actor_name} set '{title_now}' to {new_progress}% (was {prev_progress}%).",
-                    data={
-                        "project_id": str(project_id),
-                        "task_id": str(tid),
-                        "actor_id": str(actor_id) if actor_id else None,
-                        "actor_name": actor_name,
-                    },
+                    body=f"{actor_name or 'Someone'} set '{title_now}' to {new_progress}% (was {prev_progress}%).",
+                    data={"project_id": str(project_id), "task_id": str(tid),
+                          "actor_id": str(actor_id) if actor_id else None, "actor_name": actor_name},
+                    actor_id=actor_id,
                 )
 
-            just_completed = (
-                (prev_status not in {"completed","complete","done"} and new_status in {"completed","complete","done"})
-                or (prev_progress < 100 and new_progress >= 100)
-            )
+            # completed -> notify admins (exclude actor if actor is admin)
             if just_completed:
-                assignee = users_collection.find_one({"_id": t.get("assignee_id")}, {"name": 1, "email": 1})
-                assignee_label = (assignee or {}).get("name") or (assignee or {}).get("email") or str(t.get("assignee_id"))
-                notify_admins(
+                _notify_admins_excluding_actor(
                     kind="task_completed",
                     title=f"Task completed • {proj_name}",
-                    body=f"{actor_name} marked '{title_now}' as complete.",
-                    data={
-                        "project_id": str(project_id),
-                        "task_id": str(tid),
-                        "assignee_id": str(t.get("assignee_id")),
-                        "assignee_name": assignee_label,
-                        "actor_id": str(actor_id) if actor_id else None,
-                        "actor_name": actor_name,
-                    },
+                    body=f"{actor_name or 'Someone'} marked '{title_now}' as complete.",
+                    data={"project_id": str(project_id), "task_id": str(tid),
+                          "assignee_id": str(t.get("assignee_id")), "assignee_name": assignee_label,
+                          "actor_id": str(actor_id) if actor_id else None, "actor_name": actor_name},
+                    actor_id=actor_id,
                 )
+
+        except Exception:
+            pass
+
+           
         except Exception:
             pass
 

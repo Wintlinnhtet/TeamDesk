@@ -48,7 +48,7 @@ const LeftSideBar = () => {
           <li>
             <Link
               to={isAdmin ? "/admin" : "/dashboard"}
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaTachometerAlt className={`text-xl ${baseText}`} />
@@ -60,7 +60,7 @@ const LeftSideBar = () => {
           <li>
             <Link
               to={isAdmin ? "/tasks_admin" : "/tasks"}
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaTasks className={`text-xl ${baseText}`} />
@@ -74,7 +74,7 @@ const LeftSideBar = () => {
           <li>
             <Link
               to="/file-sharing"
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaShareAlt className={`text-xl ${baseText}`} />
@@ -87,8 +87,8 @@ const LeftSideBar = () => {
             <li className="mb-5">
               <Link
                 to="/members"
-                className={`${baseItem} hover:bg-[${customColor}]`}
-                style={{ color: customColor }}
+                className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+              style={{ color: customColor }}
               >
                 <FaUsers className={`text-xl ${baseText}`} />
                 <span className={baseText}>Members</span>
@@ -112,8 +112,8 @@ const LeftSideBar = () => {
       <div className="mt-10 space-y-3">
         <Link
           to="/profile"
-          className={`${baseItem} text-sm hover:bg-[${customColor}]`}
-          style={{ color: customColor }}
+         className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+              style={{ color: customColor }}
         >
           <FaCog className={`text-xl ${baseText}`} />
           <span className={baseText}>Settings</span>
@@ -121,7 +121,7 @@ const LeftSideBar = () => {
 
         <button
           onClick={onLogout}
-          className={`${baseItem} text-sm hover:bg-[${customColor}] w-full text-left`}
+          className={`${baseItem} text-sm  w-full text-left`}
           style={{ color: customColor }}
         >
           <FaSignOutAlt className={`text-xl ${baseText}`} />

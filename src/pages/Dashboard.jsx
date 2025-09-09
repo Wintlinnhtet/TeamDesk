@@ -4,6 +4,10 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 import { getCurrentUser } from "../auth";
 
+// 🔔 add these
+import NotificationBell from "../components/NotificationBell";
+import Notifications from "../components/Notifications";
+
 const DONE = new Set(["done", "complete", "completed", "finished"]);
 
 const Dashboard = () => {
@@ -11,11 +15,33 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const user = getCurrentUser(); // {_id, name, email, role, ...}
 
+  // 🔔 state for notifications panel
+  const [notifOpen, setNotifOpen] = useState(false);
+  // force a rerender of the bell to refresh count after we mark-all-read
+  const [bellKey, setBellKey] = useState(0);
+
   const [batchmates, setBatchmates] = useState([]);
   const [experience, setExperience] = useState([]);  // from user doc (string or array)
   const [projects, setProjects] = useState([]);      // projects for this user
   const [tasks, setTasks] = useState([]);            // OPEN tasks for this user (not complete)
   const [msg, setMsg] = useState("");
+
+  // 🔔 mark all read when panel opens (so the red number clears)
+  const markAllRead = async () => {
+    if (!user?._id) return;
+    try {
+      await fetch(`${API_BASE}/notifications/mark_all_read`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ for_user: user._id }),
+      });
+      // nudge the bell to refresh its unread_count polling immediately
+      setBellKey((k) => k + 1);
+    } catch {
+      // ignore — the bell will clear on its next poll anyway
+    }
+  };
 
   const initials = (name = "") =>
     name.trim().split(/\s+/).map((s) => s[0]).slice(0, 2).join("").toUpperCase();
@@ -58,17 +84,15 @@ const Dashboard = () => {
     return [];
   }, [experience]);
 
-  // NEW: filter experience to only projects with confirm:1 (match by project name)
+  // Filter experience to only projects with confirm:1 (match by project name)
   const confirmedExperience = useMemo(() => {
     if (!projects?.length) return [];
-    // Build a case-insensitive set of confirmed project names
     const confirmedNames = new Set(
       projects
         .filter((p) => Number(p?.confirm || 0) === 1)
         .map((p) => String(p?.name || "").trim().toLowerCase())
     );
     if (confirmedNames.size === 0) return [];
-    // Keep only experience entries whose project name is in that set
     return normalizedExperienceAll.filter((exp) => {
       const pname = String(exp?.project || "").trim().toLowerCase();
       return pname && confirmedNames.has(pname);
@@ -94,7 +118,6 @@ const Dashboard = () => {
       }
 
       if (list.length > 0) {
-        // de-dupe by _id just in case
         const seen = new Set();
         const openOnly = [];
         for (const t of list) {
@@ -107,7 +130,6 @@ const Dashboard = () => {
         return;
       }
 
-      // Fallback: one call, then filter client-side
       const rf = await fetch(`${API_BASE}/tasks?assignee_id=${uid}`);
       const df = await rf.json();
       const all = Array.isArray(df) ? df : [];
@@ -116,7 +138,6 @@ const Dashboard = () => {
       );
       setTasks(open);
     } catch {
-      // Final fallback: nothing
       setTasks([]);
     }
   };
@@ -135,7 +156,7 @@ const Dashboard = () => {
         if (uRes.ok) setExperience(uData.experience ?? []);
         else console.warn("get-user failed:", uData);
 
-        // 2) Projects where I'm leader or member (must include confirm field from backend)
+        // 2) Projects (for confirm:1 filtering + leader detection)
         const pRes = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
         const pData = await pRes.json();
         if (pRes.ok) setProjects(Array.isArray(pData) ? pData : []);
@@ -212,12 +233,34 @@ const Dashboard = () => {
 
   return (
     <div className="ml-5 w-full">
-      <h1 className="text-xl font-semibold text-black mt-2">
-        Hello {user?.name || user?.email || ""}
-      </h1>
-      <p className="text-sm" style={{ color: customColor }}>
-        Let's finish your task today!
-      </p>
+      {/* Header row with bell */}
+      <div className="mt-2 mb-2 flex items-start justify-between">
+        <div>
+          <h1 className="text-xl font-semibold text-black">
+            Hello {user?.name || user?.email || ""}
+          </h1>
+          <p className="text-sm" style={{ color: customColor }}>
+            Let's finish your task today!
+          </p>
+        </div>
+
+        {/* 🔔 Bell + panel */}
+        <div className="flex items-center justify-end gap-2 mb-2 mr-4 relative">
+          <NotificationBell
+            key={bellKey}
+            onOpen={async () => {
+              const next = !notifOpen;
+              setNotifOpen(next);
+              if (next) await markAllRead();
+            }}
+          />
+          <Notifications
+            currentUserId={user?._id}
+            open={notifOpen}
+            onClose={() => setNotifOpen(false)}
+          />
+        </div>
+      </div>
 
       {msg && <p className="text-red-500 mt-2">{msg}</p>}
 
@@ -353,6 +396,7 @@ const Dashboard = () => {
             </div>
           </div>
 
+          {/* Batchmates */}
           <div className="rounded-xl p-2 w-full mb-3" style={{ backgroundColor: customColor }}>
             <h2 className="text-center font-semibold text-lg mb-4 text-white">Batchmates</h2>
             {batchmates.length === 0 ? (
