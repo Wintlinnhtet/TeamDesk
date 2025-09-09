@@ -1,6 +1,6 @@
 from flask import  Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from database import db
+from backend.database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 from datetime import datetime
@@ -10,7 +10,7 @@ import re
 from werkzeug.utils import secure_filename
 import os
 from backend.extensions import socketio
-from profile_backend import profile_bp
+from backend.profile_backend import profile_bp
 # near other imports
 
 from bson import ObjectId
