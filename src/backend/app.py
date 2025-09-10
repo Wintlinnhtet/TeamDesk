@@ -8,7 +8,7 @@ import json
 from flask_socketio import emit, join_room, leave_room
 import re
 from werkzeug.utils import secure_filename
-import os
+import os, time
 from backend.extensions import socketio
 
 # near other imports
@@ -16,9 +16,17 @@ from backend.extensions import socketio
 from bson import ObjectId
 # --- add at the very top of app.py ---
 import os, sys
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # .../src/backend
-PARENT_DIR = os.path.dirname(BASE_DIR)                     # .../src
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) 
+
+PARENT_DIR = os.path.dirname(BASE_DIR) 
+
+     
+# --- uploads config (ONE place only) ---
+
+
+
 if PARENT_DIR not in sys.path:
+
     sys.path.insert(0, PARENT_DIR)
 
 
@@ -34,7 +42,7 @@ from backend.file_sharing import file_sharing_bp
 app = Flask(__name__)
 CORS(app)  # Your existing CORS setup //y2
 
-app.register_blueprint(profile_bp)
+
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
 SERVER_IP = "192.168.1.5"
 
@@ -79,6 +87,7 @@ CORS(
     allow_headers=ALLOWED_HEADERS,
     methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 )
+
 
 
 
@@ -129,6 +138,149 @@ tasks_collection   = db["tasks"]
 announcement_collection = db["announcement"]
 notifications_collection = db.get_collection("notifications")
 
+def get_request_user_oid():
+    uid = request.headers.get("X-User-Id") or request.args.get("user_id")
+    if not uid:
+        data = request.get_json(silent=True) or {}
+        uid = data.get("user_id")
+    return to_object_id(uid) if uid else None
+
+def _public_user_doc(u):
+    img = u.get("profileImage") or u.get("profileImageUrl") or "/uploads/pic.png"
+    return {
+        "id": str(u["_id"]),
+        "name": u.get("name", ""),
+        "position": u.get("position", ""),
+        "email": u.get("email", ""),
+        "address": u.get("address", ""),
+        "phone": u.get("phone", ""),
+        "profileImage": img,
+    }
+
+@app.route("/api/profile", methods=["GET", "PUT"])
+def api_profile():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    # 1) Read the user first (avoid UnboundLocalError)
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    # 2) If profileImage is missing, set a default once and reflect it in the response
+    if not u.get("profileImage"):
+        users_collection.update_one(
+            {"_id": uid},
+            {"$set": {"profileImage": "/uploads/pic.png", "updated_at": datetime.utcnow()}}
+        )
+        u["profileImage"] = "/uploads/pic.png"
+
+    if request.method == "GET":
+        return jsonify(_public_user_doc(u)), 200
+
+    # PUT: update non-password fields only
+    data = request.get_json() or {}
+    updates = {}
+    for key in ["name", "position", "email", "address", "phone"]:
+        if key in data:
+            updates[key] = (data.get(key) or "").strip()
+
+    if not updates:
+        return jsonify({"error": "No changes"}), 400
+
+    updates["updated_at"] = datetime.utcnow()
+    users_collection.update_one({"_id": uid}, {"$set": updates})
+    u2 = users_collection.find_one({"_id": uid})
+    return jsonify({"ok": True, "user": _public_user_doc(u2)}), 200
+
+@app.route("/api/profile/password", methods=["PUT"])
+def api_profile_password():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    data = request.get_json() or {}
+    current_password = (data.get("current_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+
+    if not current_password or not new_password:
+        return jsonify({"error": "Current and new password are required"}), 400
+
+    # Verify current password
+    stored_hash = u.get("password") or ""
+    try:
+      ok = check_password_hash(stored_hash, current_password)
+    except Exception:
+      ok = False
+    if not ok:
+      return jsonify({"error": "Current password is incorrect"}), 400
+
+    # Update to new password
+    try:
+        new_hash = generate_password_hash(new_password, method="scrypt")
+    except Exception:
+        new_hash = generate_password_hash(new_password, method="pbkdf2:sha256", salt_length=16)
+
+    users_collection.update_one({"_id": uid}, {"$set": {"password": new_hash, "updated_at": datetime.utcnow()}})
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/api/upload-profile-image", methods=["POST"])
+def api_upload_profile_image():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    if "profileImage" not in request.files:
+        return jsonify({"error": "No file"}), 400
+
+    f = request.files["profileImage"]
+    if not f or f.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = secure_filename(f.filename)
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+
+    # remove old file if it was an uploaded file (we don't delete the default cat2.jpg)
+    old = u.get("profileImage") or ""
+    if old.startswith("/uploads/"):
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, os.path.basename(old)))
+        except Exception:
+            pass
+
+    new_name = f"{str(uid)}_{int(time.time())}.{ext}"
+    path = os.path.join(UPLOAD_DIR, new_name)
+    f.save(path)
+
+    image_url = f"/uploads/{new_name}"
+    users_collection.update_one(
+        {"_id": uid},
+        {"$set": {"profileImage": image_url, "updated_at": datetime.utcnow()}}
+    )
+
+    return jsonify({"ok": True, "imageUrl": image_url, "profileImage": image_url}), 200
+# (keep this)
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_DIR
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
+     # .../src/backend
+# If any code elsewhere uses app.config['UPLOAD_FOLDER'], point it here too:
+
+           # .../src
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     """
@@ -485,65 +637,9 @@ def add_member():
 #         return jsonify({"error": str(e)}), 500
 
 
-# Folder for uploaded images
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
-
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 
-# Update user endpoint
-@app.patch("/update-user/<user_id>")
-def update_user(user_id):
-    # Get text fields from form
-    name = request.form.get("name")
-    dob = request.form.get("dob")
-    phone = request.form.get("phone")
-    address = request.form.get("address")
-    password = request.form.get("password")
-
-    if not name or not dob or not phone or not address or not password:
-        return jsonify({"error": "All fields are required"}), 400
-
-    hashed_password = generate_password_hash(password)
-
-    # Handle profile image (optional)
-    profile_image_filename = None
-    if "profileImage" in request.files:
-        file = request.files["profileImage"]
-        if file.filename != "" and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-            profile_image_filename = filename  # Save only filename in DB
-
-    update_data = {
-        "name": name,
-        "dob": dob,
-        "phone": phone,
-        "address": address,
-        "password": hashed_password,
-        "alreadyRegister": True
-    }
-
-    if profile_image_filename:
-        update_data["profileImage"] = profile_image_filename  # Store filename in DB
-
-    try:
-        result = users_collection.update_one(
-            {"_id": ObjectId(user_id)},
-            {"$set": update_data}
-        )
-        if result.modified_count == 0:
-            return jsonify({"error": "Update failed"}), 400
-        return jsonify({"message": "Profile updated successfully!"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 
 # -------------------- SIGN IN --------------------

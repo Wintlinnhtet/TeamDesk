@@ -1,62 +1,60 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaSearch } from "react-icons/fa";
-import { FiMail, FiPhone } from "react-icons/fi";
-import { FiTrash2 } from "react-icons/fi";
+import { FiMail, FiPhone, FiTrash2 } from "react-icons/fi";
+
+// Prefer importing from a central config
+const API_BASE = "http://localhost:5000";
+
+function buildAvatarSrc(profileImage) {
+  const v = (profileImage || "").trim();
+  if (!v) return "https://cdn-icons-png.flaticon.com/512/847/847969.png";
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`;
+  if (/^https?:\/\//i.test(v))   return v;
+  return `${API_BASE}/uploads/${v}`;
+}
 
 const Members = () => {
   const navigate = useNavigate();
-  const [members, setMembers] = useState([]); // ✅ define members state
+  const [members, setMembers] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
-
-  // Get user from localStorage
   const user = JSON.parse(localStorage.getItem("user"));
 
   const handleDelete = async (memberId) => {
-  if (!window.confirm("Are you sure you want to delete this user?")) return;
-
-  try {
-    const res = await fetch(`http://localhost:5000/delete-user/${memberId}`, {
-      method: "DELETE",
-    });
-
-    const data = await res.json();
-    if (res.ok) {
-      alert("User deleted successfully!");
-      window.location.reload(); // or re-fetch members list
-    } else {
-      alert(data.error || "Failed to delete user.");
+    if (!window.confirm("Are you sure you want to delete this user?")) return;
+    try {
+      const res = await fetch(`${API_BASE}/delete-user/${memberId}`, { method: "DELETE" });
+      const data = await res.json();
+      if (res.ok) {
+        alert("User deleted successfully!");
+        window.location.reload();
+      } else {
+        alert(data.error || "Failed to delete user.");
+      }
+    } catch (err) {
+      console.error("Delete error:", err);
+      alert("Server error.");
     }
-  } catch (err) {
-    console.error("Delete error:", err);
-    alert("Server error.");
-  }
-};
+  };
 
-  // Example: fetch members from backend
   useEffect(() => {
     const fetchMembers = async () => {
       try {
-        const res = await fetch("http://localhost:5000/registered-members");
+        const res = await fetch(`${API_BASE}/registered-members`);
         const data = await res.json();
-        console.log("Fetched members:", data); // 👈 check here
-        if (res.ok) {
-          setMembers(data); // ✅ save in state
-        }
+        if (res.ok) setMembers(data);
       } catch (err) {
         console.error("Error fetching members:", err);
       }
     };
-
     fetchMembers();
   }, []);
 
-  // Filter by search term
   const filteredMembers = members.filter(
-  (m) =>
-    m.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.email?.toLowerCase().includes(searchTerm.toLowerCase())
-);
+    (m) =>
+      m.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      m.email?.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
     <div className="bg-gray-100 min-h-screen p-10">
@@ -76,10 +74,7 @@ const Members = () => {
 
         {user?.role === "admin" && (
           <div className="flex items-center gap-4">
-            <button
-              className="bg-[#AA405B] text-white px-5 py-2 rounded-md"
-              onClick={() => navigate("/add-member")}
-            >
+            <button className="bg-[#AA405B] text-white px-5 py-2 rounded-md" onClick={() => navigate("/add-member")}>
               + Add Candidate
             </button>
           </div>
@@ -87,55 +82,39 @@ const Members = () => {
       </div>
 
       <h1 className="text-3xl font-semibold text-[#AA405B] mb-6">
-      {filteredMembers.length}{" "}
-      {filteredMembers.length === 1 ? "Employee" : "Employees"}
+        {filteredMembers.length} {filteredMembers.length === 1 ? "Employee" : "Employees"}
       </h1>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredMembers.map((member) => (
-          <div
-            key={member._id}
-            className="bg-white rounded-xl shadow-md p-5 flex-col items-center"
-          >
-            
-<div className="relative w-full">
-  {user.role === "admin" && (
-    <button
-      onClick={() => handleDelete(member._id)}
-      className="absolute top-2 right-2 text-gray-400 hover:text-red-500 transition"
-      title="Delete User"
-    >
-      <FiTrash2 size={20} />
-    </button>
-  )}
-</div>
+          <div key={member._id} className="bg-white rounded-xl shadow-md p-5 flex-col items-center">
+            <div className="relative w-full">
+              {user?.role === "admin" && (
+                <button
+                  onClick={() => handleDelete(member._id)}
+                  className="absolute top-2 right-2 text-gray-400 hover:text-red-500 transition"
+                  title="Delete User"
+                >
+                  <FiTrash2 size={20} />
+                </button>
+              )}
+            </div>
+
             <div className="flex-col items-center mb-4">
-              
               <img
-                src={
-                    member.profileImage && member.profileImage.trim() !== ""
-                    ? `http://localhost:5000/uploads/${member.profileImage}`
-                    : "https://cdn-icons-png.flaticon.com/512/847/847969.png"
-                }
-                  alt={member.name || "Profile"}
-                  className="w-18 h-18 rounded-full mr-3 object-cover"
+                src={buildAvatarSrc(member.profileImage)}
+                alt={member.name || "Profile"}
+                className="w-18 h-18 rounded-full mr-3 object-cover"
               />
-
-
               <div>
                 <h2 className="font-semibold text-lg">{member.name || "Unnamed"}</h2>
                 <p className="text-gray-500 text-sm">{member.position || "Member"}</p>
               </div>
             </div>
+
             <div className="text-sm text-gray-600 space-y-1">
-              <p className="flex gap-2">
-                <FiMail className="text-black relative top-[2px] text-[18px]" />
-                {member.email || "N/A"}
-              </p>
-              <p className="flex gap-2">
-                <FiPhone className="text-black relative top-[2px] text-[18px]" />
-                {member.phone || "N/A"}
-              </p>
+              <p className="flex gap-2"><FiMail className="text-black relative top-[2px] text-[18px]" />{member.email || "N/A"}</p>
+              <p className="flex gap-2"><FiPhone className="text-black relative top-[2px] text-[18px]" />{member.phone || "N/A"}</p>
               <p><strong>DOB:</strong> {member.dob || "N/A"}</p>
               <p><strong>Address:</strong> {member.address || "N/A"}</p>
             </div>
