@@ -605,39 +605,52 @@ def add_member():
     return jsonify({"message": "Member added successfully!"}), 201
 
 # -------------------- register USER --------------------
-# @app.patch("/update-user/<user_id>")
-# def update_user(user_id):
-#     data = request.get_json() or {}
-#     name = data.get("name")
-#     dob = data.get("dob")
-#     phone = data.get("phone")
-#     address = data.get("address")
-#     password = data.get("password")
+# Update user endpoint
+@app.patch("/update-user/<user_id>")
+def update_user(user_id):
+    # Get text fields from form
+    name = request.form.get("name")
+    dob = request.form.get("dob")
+    phone = request.form.get("phone")
+    address = request.form.get("address")
+    password = request.form.get("password")
 
-#     if not name or not dob or not phone or not address or not password:
-#         return jsonify({"error": "All fields are required"}), 400
+    if not name or not dob or not phone or not address or not password:
+        return jsonify({"error": "All fields are required"}), 400
 
-#     hashed_password = generate_password_hash(password)
-#     try:
-#         result = users_collection.update_one(
-#             {"_id": ObjectId(user_id)},
-#             {"$set": {
-#                 "name": name,
-#                 "dob": dob,
-#                 "phone": phone,
-#                 "address": address,
-#                 "password": hashed_password,
-#                 "alreadyRegister": True  # 🔥 Highlight: mark user as registered
-#             }}
-#         )
-#         if result.modified_count == 0:
-#             return jsonify({"error": "Update failed"}), 400
-#         return jsonify({"message": "Profile updated successfully!"})
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
+    hashed_password = generate_password_hash(password)
 
+    # Handle profile image (optional)
+    profile_image_filename = None
+    if "profileImage" in request.files:
+        file = request.files["profileImage"]
+        if file.filename != "" and allowed_file(file.filename):
+            filename = secure_filename(file.filename)
+            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+            profile_image_filename = filename  # Save only filename in DB
 
+    update_data = {
+        "name": name,
+        "dob": dob,
+        "phone": phone,
+        "address": address,
+        "password": hashed_password,
+        "alreadyRegister": True
+    }
 
+    if profile_image_filename:
+        update_data["profileImage"] = profile_image_filename  # Store filename in DB
+
+    try:
+        result = users_collection.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": update_data}
+        )
+        if result.modified_count == 0:
+            return jsonify({"error": "Update failed"}), 400
+        return jsonify({"message": "Profile updated successfully!"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 
@@ -1865,16 +1878,7 @@ def get_user(user_id):
         return jsonify({"error": str(e)}), 500
     
 
-# Folder for uploaded images
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# Serve uploaded images
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route("/api/announcement", methods=["POST"])
 def save_announcement():

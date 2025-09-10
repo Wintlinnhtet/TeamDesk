@@ -4,6 +4,17 @@ import { Link } from "react-router-dom";
 import { FaSearch } from 'react-icons/fa';
 import { MdCampaign } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
+// put this near imports (or import from a config)
+const API_BASE = "http://localhost:5000";
+
+// Normalize DB image -> usable <img src>
+function buildAnnImageSrc(image) {
+  const v = (image || "").trim();
+  if (!v) return "/default-announcement.png";              // React /public fallback
+  if (/^https?:\/\//i.test(v)) return v;                   // absolute URL already
+  if (v.startsWith("/src/uploads/")) return `${API_BASE}${v}`; // stored as '/uploads/..'
+  return `${API_BASE}/src/uploads/${v}`;                       // bare filename -> uploads
+}
 
 const PageContainer = styled.div`
   max-width: 90vw;
@@ -167,10 +178,11 @@ const Announcement = () => {
         style={{ display: "flex", alignItems: "center", flex: 1 }}
       >
         <Image
-          src={a.image ? a.image : "/default-announcement.png"} // ✅ fallback image
-          alt="Announcement"
-          className="w-full h-[250px] object-cover rounded-lg shadow-md"
-        />
+  src={buildAnnImageSrc(a.image)}
+  alt="Announcement"
+  className="w-full h-[250px] object-cover rounded-lg shadow-md"
+/>
+
         <Content>
           <Title>{a.title}</Title>
           <p style={{ fontSize: "0.8rem", color: "#555", margin: "0 0 0.4rem 0" }}>
