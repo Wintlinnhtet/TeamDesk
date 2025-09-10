@@ -1,21 +1,72 @@
+// src/frontend/components/task_employee.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { FaBell, FaChevronRight, FaChevronLeft } from "react-icons/fa";
-import { FiCheckCircle } from "react-icons/fi";
 import { API_BASE } from "../config";
 import { useNavigate } from "react-router-dom";
 import useRealtime from "../hooks/useRealtime";
 
-// --- helpers ---
-const initials = (name = "", email = "") => {
+/* ---------------- helpers ---------------- */
+const sk = (x = "") => (x || "").toLowerCase();
+const DONE = new Set(["done", "complete", "completed", "finished"]);
+const customColor = "#AA405B";
+
+/** 1-letter fallback */
+const initial1 = (name = "", email = "") => {
   const src = (name || "").trim() || (email || "").trim();
   return src ? src[0].toUpperCase() : "?";
 };
 
-// Generate N distinct random HSL colors (randomized order but evenly spaced)
+const joinUrl = (a = "", b = "") =>
+  `${String(a).replace(/\/+$/, "")}/${String(b).replace(/^\/+/, "")}`;
+
+/** robust image URL builder */
+const buildImageUrl = (v) => {
+  if (!v) return null;                  // return null (not "")
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // Absolute URL
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // Starts with /uploads/ -> API_BASE + path
+  if (s.startsWith("/uploads/")) return joinUrl(API_BASE, s);
+
+  // Starts with uploads/ (missing leading slash) -> fix to /uploads/...
+  if (/^uploads\//i.test(s)) return joinUrl(API_BASE, `/${s}`);
+
+  // Bare filename like avatar.jpg -> /uploads/avatar.jpg
+  if (!s.startsWith("/") && /\.(png|jpe?g|gif|webp|avif)$/i.test(s)) {
+    return joinUrl(API_BASE, `/uploads/${s}`);
+  }
+
+  // Otherwise treat as public asset path or custom path
+  return s;
+};
+
+const addBust = (url, bustKey) => {
+  if (!url) return null;
+  if (!bustKey) return url;
+  return url + (url.includes("?") ? "&" : "?") + `t=${encodeURIComponent(bustKey)}`;
+};
+
+/** choose best candidate field for a member image */
+const bestMemberImage = (m) => {
+  const candidates = [
+    m?.profileImage,
+    m?.profileImageUrl,
+    m?.picture,
+    m?.profile?.photo,
+    m?.avatar_url,
+    m?.avatar,
+  ].filter(Boolean);
+  return candidates[0] || "";
+};
+
+/** colors */
 const generateColors = (count) => {
   if (!count) return [];
   const colors = [];
-  const base = Math.floor(Math.random() * 360); // random offset per load
+  const base = Math.floor(Math.random() * 360);
   const step = 360 / count;
   for (let i = 0; i < count; i++) {
     const hue = Math.round((base + i * step) % 360);
@@ -24,32 +75,18 @@ const generateColors = (count) => {
   return colors;
 };
 
-const sk = (x = "") => (x || "").toLowerCase();
-const DONE = new Set(["done", "complete", "completed", "finished"]);
-
-// parse "todo,80" → 80; "complete" → 100; fallback → 0
-const parseProgress = (status = "") => {
-  const s = String(status || "").toLowerCase();
-  if (DONE.has(s)) return 100;
-  const m = s.match(/(\d{1,3})/);
-  const n = m ? Math.max(0, Math.min(100, parseInt(m[1], 10))) : 0;
-  return n;
-};
-
-
-// pull the numeric % out of "todo,80", clamp, or 100 for any "done" state
+/** parse "todo,80" | "80" | "complete" -> 0..100 */
 const percentFromStatus = (status = "") => {
   const s = String(status || "");
   if (DONE.has(sk(s))) return 100;
-  const m = s.match(/(\d+)/);
+  const m = s.match(/(\d{1,3})/);
   const n = m ? Number(m[1]) : 0;
-  return Math.max(0, Math.min(100, isNaN(n) ? 0 : n));
+  return Math.max(0, Math.min(100, Number.isFinite(n) ? n : 0));
 };
 
+/* ---------------- component ---------------- */
 const Task = () => {
-  const customColor = "#AA405B";
-
-  // ---- who am I ----
+  // who am I
   const [user, setUser] = useState(null);
   useEffect(() => {
     try {
@@ -62,17 +99,44 @@ const Task = () => {
     }
   }, []);
 
-  // ---- projects & selection ----
+  // refresh user (pull latest profileImage)
+  useEffect(() => {
+    (async () => {
+     const rawId =
+      (typeof user?._id === "object" ? user?._id?.$oid : user?._id) || user?.id;
+      if (!rawId) return;
+      try {
+        
+        if (!r.ok) return;
+         const url = new URL(`${API_BASE}/api/profile`);
+      url.searchParams.set("user_id", rawId);
+      const r = await fetch(url.toString(), { credentials: "include" });
+      if (!r.ok) return;
+      const fresh = await r.json();
+        setUser((prev) => ({
+          ...(prev || {}),
+          ...fresh,
+          _id: fresh?._id || prev?._id || rawId,
+        }));
+      } catch {
+        // ignore
+      }
+    })();
+  }, [user?._id]);
+
+  // projects & selection
   const [projects, setProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!user?._id) return;
+    const uid =
+      (typeof user?._id === "object" ? user?._id?.$oid : user?._id) || user?.id;
+    if (!uid) return;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
+        const r = await fetch(`${API_BASE}/projects?for_user=${uid}`);
         const list = await r.json();
         if (!r.ok) throw new Error(list.error || `Projects ${r.status}`);
         const arr = Array.isArray(list) ? list : [];
@@ -82,20 +146,24 @@ const Task = () => {
         setErr(e.message || "Failed to load projects");
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?._id]);
 
-  // ---- RIGHT PANE (unchanged) data ----
+  // RIGHT PANE data
   const [myTasks, setMyTasks] = useState([]);
   const [progressCount, setProgressCount] = useState(0);
   const [completeCount, setCompleteCount] = useState(0);
-  const [statusFilter, setStatusFilter] = useState("todo"); // right pane filter
+  const [statusFilter, setStatusFilter] = useState("todo");
+
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!user?._id) return;
+    const uid =
+      (typeof user?._id === "object" ? user?._id?.$oid : user?._id) || user?.id;
+    if (!uid) return;
     (async () => {
       try {
-        const r = await fetch(`${API_BASE}/tasks?assignee_id=${user._id}`);
+        const r = await fetch(`${API_BASE}/tasks?assignee_id=${uid}`);
         const data = await r.json();
         const list = Array.isArray(data) ? data : (Array.isArray(data?.tasks) ? data.tasks : []);
         setMyTasks(list);
@@ -119,7 +187,7 @@ const Task = () => {
     });
   }, [myTasks, statusFilter]);
 
-  // ---- Calendar (RIGHT) state early so memos can use them if needed ----
+  // Calendar
   const [calMonth, setCalMonth] = useState(() => new Date());
   const calYear  = calMonth.getFullYear();
   const calMon   = calMonth.getMonth();
@@ -128,14 +196,12 @@ const Task = () => {
   const isToday = (d) =>
     d === today.getDate() && calMon === today.getMonth() && calYear === today.getFullYear();
 
-  // map project_id -> project name (for calendar tooltips)
   const projectNameById = useMemo(() => {
     const map = new Map();
     (projects || []).forEach(p => map.set(p._id, p.name || "Untitled project"));
     return map;
   }, [projects]);
 
-  // Bucket MY tasks by end date (YYYY-MM-DD) in the current month (for calendar)
   const tasksByDay = useMemo(() => {
     const byDay = new Map();
     for (const t of myTasks) {
@@ -150,76 +216,55 @@ const Task = () => {
     return byDay;
   }, [myTasks, calYear, calMon]);
 
-  // which calendar day is selected and its tasks
   const [selectedDay, setSelectedDay] = useState(null);
   const [selectedDayTasks, setSelectedDayTasks] = useState([]);
 
-  // ---- LEFT PANE: Project-wide tasks ----
+  // LEFT PANE: project tasks + members
   const [projectTasks, setProjectTasks] = useState([]);
   const [membersById, setMembersById] = useState({});
   const [memberColors, setMemberColors] = useState({});
-// parse "status" like "todo,80" or "complete" → 0..100
-const pctFromStatus = (status) => {
-  if (!status) return 0;
-  const s = String(status).trim().toLowerCase();
-  if (DONE.has(s)) return 100;
-  const m = /^todo\s*,\s*(\d{1,3})/.exec(s);
-  if (m) return Math.max(0, Math.min(100, parseInt(m[1], 10)));
-  const n = parseInt(s, 10);
-  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
-};
-const selectedProject = useMemo(
-  () => projects.find(p => p._id === selectedProjectId) || null,
-  [projects, selectedProjectId]
-);
 
-const projectName = selectedProject?.name || "Untitled project";
+  const selectedProject = useMemo(
+    () => projects.find(p => p._id === selectedProjectId) || null,
+    [projects, selectedProjectId]
+  );
+  const projectName = selectedProject?.name || "Untitled project";
 
-// Aggregate completion across all tasks (simple average of each task's %)
-const projectCompletionPct = useMemo(() => {
-  if (!projectTasks?.length) return 0;
-  const total = projectTasks.reduce((sum, t) => sum + pctFromStatus(t.status), 0);
-  return Math.round(total / projectTasks.length);
-}, [projectTasks]);
+  const projectCompletionPct = useMemo(() => {
+    if (!projectTasks?.length) return 0;
+    const total = projectTasks.reduce((sum, t) => sum + percentFromStatus(t.status), 0);
+    return Math.round(total / projectTasks.length);
+  }, [projectTasks]);
 
-// "Expected completion" = farthest end_at among tasks (fallback: latest start_at / created_at)
-const expectedDate = useMemo(() => {
-  if (!projectTasks?.length) return null;
-  const toDate = (t) => new Date(t.end_at || t.start_at || t.created_at || 0).getTime();
-  const maxMs = Math.max(...projectTasks.map(toDate).filter(Boolean));
-  return Number.isFinite(maxMs) ? new Date(maxMs) : null;
-}, [projectTasks]);
-// tasks in selected project that belong to the logged-in user
-const myProjectTasks = useMemo(() => {
-  if (!user?._id) return [];
-  return (projectTasks || []).filter(t => t.assignee_id === user._id);
-}, [projectTasks, user?._id]);
+  const expectedDate = useMemo(() => {
+    if (!projectTasks?.length) return null;
+    const toDate = (t) => new Date(t.end_at || t.start_at || t.created_at || 0).getTime();
+    const maxMs = Math.max(...projectTasks.map(toDate).filter(Boolean));
+    return Number.isFinite(maxMs) ? new Date(maxMs) : null;
+  }, [projectTasks]);
 
-// choose which of *my* tasks to show in header (earliest upcoming end date; fallback to first)
-const myFeaturedTaskTitle = useMemo(() => {
-  if (!myProjectTasks.length) return "—";
-  const withEnd = myProjectTasks
-    .filter(t => t.end_at)
-    .sort((a, b) => new Date(a.end_at) - new Date(b.end_at));
-  return (withEnd[0]?.title) || myProjectTasks[0].title || "—";
-}, [myProjectTasks]);
+  const myProjectTasks = useMemo(() => {
+    const uid =
+      (typeof user?._id === "object" ? user?._id?.$oid : user?._id) || user?.id;
+    if (!uid) return [];
+    return (projectTasks || []).filter(t => t.assignee_id === uid);
+  }, [projectTasks, user?._id]);
 
-// days remaining to expectedDate (ceil)
-const expectedDays = useMemo(() => {
-  if (!expectedDate) return null;
-  const ms = expectedDate.setHours(0,0,0,0) - new Date().setHours(0,0,0,0);
-  return Math.ceil(ms / (1000 * 60 * 60 * 24));
-}, [expectedDate]);
+  const myFeaturedTaskTitle = useMemo(() => {
+    if (!myProjectTasks.length) return "—";
+    const withEnd = myProjectTasks
+      .filter(t => t.end_at)
+      .sort((a, b) => new Date(a.end_at) - new Date(b.end_at));
+    return (withEnd[0]?.title) || myProjectTasks[0].title || "—";
+  }, [myProjectTasks]);
 
-// Optional: show a "featured" task (earliest upcoming end date)
-const featuredTaskTitle = useMemo(() => {
-  const upcoming = projectTasks
-    .filter(t => t.end_at)
-    .sort((a,b) => new Date(a.end_at) - new Date(b.end_at));
-  return upcoming[0]?.title || projectTasks[0]?.title || "—";
-}, [projectTasks]);
+  const expectedDays = useMemo(() => {
+    if (!expectedDate) return null;
+    const ms = expectedDate.setHours(0,0,0,0) - new Date().setHours(0,0,0,0);
+    return Math.ceil(ms / (1000 * 60 * 60 * 24));
+  }, [expectedDate]);
 
-  // Build a unique color mapping per assignee when projectTasks change
+  // color per assignee
   useEffect(() => {
     if (!projectTasks || projectTasks.length === 0) {
       setMemberColors({});
@@ -232,7 +277,7 @@ const featuredTaskTitle = useMemo(() => {
     setMemberColors(mapping);
   }, [projectTasks]);
 
-  // realtime for selected project → only touches LEFT data
+  // realtime
   useRealtime(selectedProjectId, {
     onCreated: (t) => {
       if (t.project_id !== selectedProjectId) return;
@@ -247,7 +292,7 @@ const featuredTaskTitle = useMemo(() => {
     }
   });
 
-  // fetch members + tasks for the selected project
+  // load project details + tasks; enrich members with an image
   useEffect(() => {
     if (!selectedProjectId) return;
     let cancelled = false;
@@ -270,9 +315,37 @@ const featuredTaskTitle = useMemo(() => {
 
         if (cancelled) return;
 
-        const m = {};
-        (proj.members || []).forEach(mm => { m[mm._id] = mm; });
-        setMembersById(m);
+        const baseMembers = {};
+        const missingImgIds = [];
+        (proj.members || []).forEach((mm) => {
+          const id = typeof mm?._id === "object" ? mm._id?.$oid : mm?._id;
+          const candidate = bestMemberImage(mm);
+          baseMembers[id] = { ...mm, _img: buildImageUrl(candidate) };
+          if (!baseMembers[id]._img && id) missingImgIds.push(id);
+        });
+
+        if (missingImgIds.length > 0) {
+          try {
+            const url = new URL(`${API_BASE}/users`);
+            url.searchParams.set("ids", missingImgIds.join(","));
+            const ru = await fetch(url.toString(), { credentials: "include" });
+            const ju = await ru.json().catch(() => []);
+            if (ru.ok && Array.isArray(ju)) {
+              const byId = new Map(
+                ju.map((u) => [
+                  String(typeof u._id === "object" ? u._id.$oid : u._id || u.id),
+                  buildImageUrl(u.profileImage || u.picture || "")
+                ])
+              );
+              missingImgIds.forEach((id) => {
+                const url = byId.get(String(id)) || "";
+                if (url && baseMembers[id]) baseMembers[id]._img = url;
+              });
+            }
+          } catch { /* ignore */ }
+        }
+
+        setMembersById(baseMembers);
 
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.tasks) ? raw.tasks : []);
         setProjectTasks(list);
@@ -280,6 +353,7 @@ const featuredTaskTitle = useMemo(() => {
         if (!cancelled) {
           setErr(e.message || "Failed to load project/tasks");
           setProjectTasks([]);
+          setMembersById({});
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -289,6 +363,28 @@ const featuredTaskTitle = useMemo(() => {
     return () => { cancelled = true; };
   }, [selectedProjectId]);
 
+  /* --------- CURRENT USER PICTURE (right panel) --------- */
+  // Build a cache-busting key from updated timestamps (your sample user has "updated_at": {"$date": "..."}).
+  const meBustKey = useMemo(() => {
+    const ua = user?.updatedAt || user?.profileImageUpdatedAt;
+    const mongoDate = user?.updated_at?.$date || user?.updated_at;
+    return String(ua || mongoDate || "");
+  }, [user?.updatedAt, user?.profileImageUpdatedAt, user?.updated_at]);
+
+  const mePic = useMemo(() => {
+  const raw = user?.profileImage || user?.picture || null;
+  const u = buildImageUrl(raw);
+  return u ? `${u}${u.includes("?") ? "&" : "?"}t=${encodeURIComponent(meBustKey)}` : null;
+}, [user?.profileImage, user?.picture, meBustKey]);
+  const meInitial = useMemo(
+    () => (user?.name?.[0] || user?.email?.[0] || "?").toUpperCase(),
+    [user?.name, user?.email]
+  );
+
+  const [imgError, setImgError] = useState(false);
+  useEffect(() => { setImgError(false); }, [mePic]);
+
+  /* ---------------- render ---------------- */
   return (
     <div className="p-6 font-sans bg-white min-h-screen w-full flex">
       {/* LEFT / MAIN PANE */}
@@ -314,49 +410,49 @@ const featuredTaskTitle = useMemo(() => {
           </div>
         </header>
 
-        {/* Project-wide task list (ALL tasks in the project) */}
+        {/* Project-wide task list */}
         <div className="p-6 rounded-2xl border border-gray-200 shadow-sm bg-white">
           <div className="flex items-center justify-between p-4 w-full max-w-4xl">
-  {/* Left: project + a sample task name */}
-  <div className="flex flex-col">
-    <div className="text-lg font-semibold text-gray-800 mb-2">
-      {projectName}
-    </div>
-    <div className="text-sm text-gray-500 mb-1">
-       <p>Task: <span className="font-semibold">{myFeaturedTaskTitle}</span></p>
-  
-    </div>
-  </div>
+            {/* Left */}
+            <div className="flex flex-col">
+              <div className="text-lg font-semibold text-gray-800 mb-2">
+                {projectName}
+              </div>
+              <div className="text-sm text-gray-500 mb-1">
+                <p>
+                  Task: <span className="font-semibold">{myProjectTasks.length ? myFeaturedTaskTitle : "—"}</span>
+                </p>
+              </div>
+            </div>
 
-  {/* Middle: aggregate progress */}
-  <div className="flex flex-col items-center justify-center">
-    <div className="text-sm text-gray-500 mb-2">Complete</div>
-    <div className="w-32 bg-gray-200 rounded-full h-2 mb-2 overflow-hidden">
-      <div
-        className="h-2 rounded-full"
-        style={{
-          width: `${projectCompletionPct}%`,
-          backgroundColor: "#ef4444" // keep your red bar color
-        }}
-      />
-    </div>
-    <div className="text-sm text-gray-500">{projectCompletionPct}%</div>
-  </div>
+            {/* Middle */}
+            <div className="flex flex-col items-center justify-center">
+              <div className="text-sm text-gray-500 mb-2">Complete</div>
+              <div className="w-32 bg-gray-200 rounded-full h-2 mb-2 overflow-hidden">
+                <div
+                  className="h-2 rounded-full"
+                  style={{
+                    width: `${projectCompletionPct}%`,
+                    backgroundColor: "#ef4444",
+                  }}
+                />
+              </div>
+              <div className="text-sm text-gray-500">{projectCompletionPct}%</div>
+            </div>
 
-  {/* Right: expected completion date + days */}
-  <div className="flex flex-col items-end">
-    <div className="text-sm text-gray-500">Expected Completion</div>
-    <div className="text-lg font-semibold text-gray-800">
-      {expectedDate
-        ? expectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
-        : "—"}
-    </div>
-    <div className="text-xs text-gray-400">
-      {expectedDays != null ? `${expectedDays} Days` : "—"}
-    </div>
-  </div>
-</div>
-
+            {/* Right */}
+            <div className="flex flex-col items-end">
+              <div className="text-sm text-gray-500">Expected Completion</div>
+              <div className="text-lg font-semibold text-gray-800">
+                {expectedDate
+                  ? expectedDate.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })
+                  : "—"}
+              </div>
+              <div className="text-xs text-gray-400">
+                {expectedDays != null ? `${expectedDays} Days` : "—"}
+              </div>
+            </div>
+          </div>
 
           {loading ? (
             <div className="text-sm text-gray-500">Loading…</div>
@@ -367,77 +463,86 @@ const featuredTaskTitle = useMemo(() => {
           ) : (
             <div className="space-y-4">
               {projectTasks.map((t) => {
-  const m = membersById[t.assignee_id] || {};
-  const pic = m.avatar || m.picture || m.profile?.photo || "";
-  const letter = initials(m.name, m.email);
+                const m = membersById[t.assignee_id] || {};
+                const pic = m?._img || "";
+                const letter = initial1(m?.name, m?.email);
+                const pct = percentFromStatus(t.status);
+                const isDone = pct === 100;
 
-  const pct = percentFromStatus(t.status);  // 0..100 (or 100 if done)
-  const isDone = pct === 100;
+                return (
+                  <div key={t._id} className="relative w-full">
+                    <div
+                      className="rounded-full text-white px-4 py-3 flex items-center gap-3 shadow"
+                      style={{
+                        width: `${Math.max(pct, 12)}%`,
+                        minWidth: 160,
+                        backgroundColor: memberColors[t.assignee_id] || "#888",
+                        transition: "width 220ms ease",
+                      }}
+                    >
+                      {/* avatar/initial */}
+                      <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center ring-2 ring-white/40">
+                        {pic ? (
+                          <img
+                            src={pic}
+                            alt=""
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.style.display = "none";
+                              const sibling = e.currentTarget.nextElementSibling;
+                              if (sibling) sibling.style.display = "flex";
+                            }}
+                          />
+                        ) : null}
+                        <span
+                          className="text-sm font-bold"
+                          style={{ display: pic ? "none" : "flex" }}
+                        >
+                          {letter}
+                        </span>
+                      </div>
 
-  return (
-    <div key={t._id} className="relative w-full">
-      {/* the colored piece itself */}
-      <div
-        className="rounded-full text-white px-4 py-3 flex items-center gap-3 shadow"
-        style={{
-          width: `${Math.max(pct, 12)}%`,        // visible even at tiny %
-          minWidth: 160,                          // keeps avatar/title readable
-          backgroundColor: memberColors[t.assignee_id] || "#888",
-          transition: "width 220ms ease",
-        }}
-        
-      >
-        {/* avatar/initial */}
-        <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center ring-2 ring-white/40">
-          {pic ? (
-            <img src={pic} alt="" className="w-full h-full object-cover" />
-          ) : (
-            <span className="text-sm font-bold">{letter}</span>
-          )}
-        </div>
+                      {/* title + assignee */}
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold truncate">
+                          {t.title}{" "}
+                          <span className="opacity-90 font-normal">
+                            — {m.name || m.email || "Member"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-white/90">
+                          {isDone ? "Completed" : `Progress: ${pct}%`}
+                        </div>
+                      </div>
 
-        {/* title + assignee */}
-        <div className="min-w-0">
-          <div className="text-sm font-semibold truncate">
-            {t.title}{" "}
-            <span className="opacity-90 font-normal">
-              — {m.name || m.email || "Member"}
-            </span>
-          </div>
-          <div className="text-xs text-white/90">
-            {isDone ? "Completed" : `Progress: ${pct}%`}
-          </div>
-        </div>
-
-        {/* right status */}
-        <div className="ml-auto flex items-center">
-          {isDone ? (
-            // inline check (no extra lib import)
-            <svg viewBox="0 0 20 20" className="w-5 h-5" aria-hidden="true">
-              <path
-                fill="currentColor"
-                d="M7.7 13.3L4.9 10.5l-1.4 1.4 4.2 4.2 8-8-1.4-1.4z"
-              />
-            </svg>
-          ) : (
-            <span className="text-xs font-semibold">{pct}%</span>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-})}
-
+                      {/* right status */}
+                      <div className="ml-auto flex items-center">
+                        {isDone ? (
+                          <svg viewBox="0 0 20 20" className="w-5 h-5" aria-hidden="true">
+                            <path
+                              fill="currentColor"
+                              d="M7.7 13.3L4.9 10.5l-1.4 1.4 4.2 4.2 8-8-1.4-1.4z"
+                            />
+                          </svg>
+                        ) : (
+                          <span className="text-xs font-semibold">{pct}%</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
       </div>
 
-      {/* RIGHT PANE (UNCHANGED) */}
+      {/* RIGHT PANE */}
       <div className="w-1/3 pl-6 border-l border-gray-200">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
-            <img src="1person.jpg" alt="avatar" className="w-10 h-10 rounded-full" />
+           
+
             <div>
               <div className="font-semibold">{user?.name || user?.email || "User"}</div>
               <div className="text-xs text-gray-500">{user?.email || ""}</div>
@@ -495,7 +600,7 @@ const featuredTaskTitle = useMemo(() => {
           )}
         </div>
 
-        {/* Calendar (unchanged structure from your last version) */}
+        {/* Calendar */}
         <div style={{ backgroundColor: customColor }} className="rounded-xl p-4 text-white">
           <div className="flex items-center justify-between mb-2">
             <button
@@ -543,7 +648,6 @@ const featuredTaskTitle = useMemo(() => {
               const day = i + 1;
               const tasksDue = tasksByDay.get(day) || [];
               const hasDue = tasksDue.length > 0;
-
               const todayPill = isToday(day);
 
               const style = hasDue

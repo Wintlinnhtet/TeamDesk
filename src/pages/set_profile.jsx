@@ -1,36 +1,66 @@
-// src/frontend/components/Profile.jsx  (drop-in replacement for your set_profile.jsx)
-import React, { useEffect, useState } from "react";
+// src/frontend/components/Profile.jsx
+import React, { useEffect, useMemo, useState } from "react";
 import { API_BASE } from "../config";
 
-/* Get current user id from local/session storage */
-function getCurrentUserId() {
+/* Pull current user id from local/session storage */
+function getCurrentUser() {
   try {
     const ls = JSON.parse(localStorage.getItem("user") || "null");
     const ss = JSON.parse(sessionStorage.getItem("user") || "null");
     const raw = ls?.user || ls || ss?.user || ss || null;
-    return raw?._id ? String(raw._id) : null;
+    if (!raw) return null;
+    return { id: String(raw._id || raw.id || ""), name: raw.name || "", email: raw.email || "" };
   } catch {
     return null;
   }
 }
 
+/* First-letter avatar (uses name if possible, else email) */
+function InitialAvatar({ name, email, size = 64, className = "" }) {
+  const letter = useMemo(() => {
+    const src = (name || email || "?").trim();
+    return src ? src[0].toUpperCase() : "?";
+  }, [name, email]);
+
+  // simple background based on charCode for variety, deterministic
+  const hue = useMemo(() => ((letter.charCodeAt(0) || 65) * 13) % 360, [letter]);
+  const style = {
+    width: size,
+    height: size,
+    background: `hsl(${hue} 60% 85%)`,
+    color: `hsl(${hue} 50% 30%)`,
+  };
+
+  return (
+    <div
+      className={`flex items-center justify-center rounded-full font-semibold select-none ${className}`}
+      style={style}
+      aria-label={`Avatar ${letter}`}
+    >
+      {letter}
+    </div>
+  );
+}
+
 export default function Profile() {
   const customColor = "#AA405B";
-  const userId = getCurrentUserId();
+  const current = getCurrentUser();
+  const userId = current?.id || null;
 
-  // ---- state (ALL hooks live inside the component) ----
   const [profile, setProfile] = useState({
     name: "",
     position: "",
     email: "",
     address: "",
     phone: "",
-    profileImage: "/uploads/pic.png", // fallback
+    profileImage: "", // no default path; we'll use InitialAvatar if empty
   });
+
   const [isEditing, setIsEditing] = useState(false);
   const [selectedFile, setSelectedFile] = useState(null);
   const [previewImage, setPreviewImage] = useState(null);
-  const [imgBust, setImgBust] = useState(0); // cache-buster for <img> after upload
+  const [imgBust, setImgBust] = useState(0);
+  const [imgError, setImgError] = useState(false); // if true -> show InitialAvatar
 
   const [curPw, setCurPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -39,18 +69,26 @@ export default function Profile() {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // Build the correct <img src> for DB/path/URL values
-  const getImageSrc = () => {
+  // Build <img src> from DB value or preview
+  const imageSrc = useMemo(() => {
+    // If user picked a new file, show its preview
     if (previewImage) return previewImage;
 
-    const v = profile.profileImage || "/uploads/pic.png";
-    // Full URL (http/https) — use as is
+    const v = profile.profileImage || "";
+    if (!v) return ""; // force InitialAvatar
+
+    // absolute URL: use as-is
     if (/^https?:\/\//i.test(v)) return v;
-    // Server-stored upload: “/uploads/…”
+
+    // server-stored upload path (starts with /uploads/)
     if (v.startsWith("/uploads/")) return `${API_BASE}${v}?t=${imgBust}`;
-    // Fallback to public asset (e.g. cat2.jpg in /public)
+
+    // plain filename in DB (e.g., "cat2.jpg") — assume server upload dir
+    if (!v.includes("/") && v.includes(".")) return `${API_BASE}/uploads/${v}?t=${imgBust}`;
+
+    // anything else: try as-is
     return v;
-  };
+  }, [previewImage, profile.profileImage, imgBust]);
 
   // ---- load profile from backend ----
   useEffect(() => {
@@ -62,6 +100,7 @@ export default function Profile() {
       try {
         setLoading(true);
         setErr("");
+        setImgError(false);
         const r = await fetch(
           `${API_BASE}/api/profile?user_id=${encodeURIComponent(userId)}`,
           { credentials: "include" }
@@ -75,7 +114,7 @@ export default function Profile() {
           email: j.email || "",
           address: j.address || "",
           phone: j.phone || "",
-          profileImage: j.profileImage || "/uploads/pic.png",
+          profileImage: j.profileImage || "", // empty -> InitialAvatar
         });
       } catch (e) {
         setErr(e.message || "Failed to load profile.");
@@ -100,6 +139,7 @@ export default function Profile() {
     }
     setSelectedFile(f);
     setErr("");
+    setImgError(false); // we'll try to show preview
     const reader = new FileReader();
     reader.onloadend = () => setPreviewImage(reader.result);
     reader.readAsDataURL(f);
@@ -109,17 +149,13 @@ export default function Profile() {
   const uploadProfileImage = async () => {
     if (!selectedFile || !userId) return;
     const fd = new FormData();
-fd.append("profileImage", selectedFile);
-await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: "POST", body: fd, credentials: "include" });
-
+    fd.append("profileImage", selectedFile);
 
     try {
       setLoading(true);
       setErr("");
       const r = await fetch(
-        `${API_BASE}/api/upload-profile-image?user_id=${encodeURIComponent(
-          userId
-        )}`,
+        `${API_BASE}/api/upload-profile-image?user_id=${encodeURIComponent(userId)}`,
         {
           method: "POST",
           body: fd,
@@ -129,13 +165,12 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
       const j = await r.json();
       if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
 
-      const newPath = j.profileImage || j.imageUrl;
-      if (newPath) {
-        setProfile((p) => ({ ...p, profileImage: newPath }));
-        setImgBust(Date.now()); // force <img> refresh
-      }
+      const newPath = j.profileImage || j.imageUrl || "";
+      setProfile((p) => ({ ...p, profileImage: newPath }));
+      setImgBust(Date.now()); // refresh cache
       setSelectedFile(null);
       setPreviewImage(null);
+      setImgError(false);
       alert("Profile image updated!");
     } catch (e) {
       setErr(e.message || "Upload failed");
@@ -220,6 +255,8 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
     }
   };
 
+  const showImg = Boolean(imageSrc) && !imgError;
+
   if (loading && !profile.name) {
     return (
       <div
@@ -254,17 +291,25 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
           <h2 className="text-2xl font-bold" style={{ color: customColor }}>
             Account Settings
           </h2>
-          <p className="text-sm text-gray-600">
-            Manage your profile and account settings
-          </p>
+          <p className="text-sm text-gray-600">Manage your profile and account settings</p>
         </div>
-        <img
-          src={getImageSrc()}
-          alt="profile"
-          className="w-16 h-16 rounded-full object-cover border-2"
-          style={{ borderColor: customColor }}
-          onError={(e) => (e.currentTarget.src = "/uploads/pic.png")}
-        />
+
+        {showImg ? (
+          <img
+            src={imageSrc}
+            alt="profile"
+            className="w-16 h-16 rounded-full object-cover border-2"
+            style={{ borderColor: customColor }}
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <InitialAvatar
+            name={profile.name || current?.name}
+            email={profile.email || current?.email}
+            size={64}
+            className="border-2"
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -279,25 +324,31 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
             </h3>
             <div className="flex flex-col md:flex-row items-start gap-6">
               <div className="flex-shrink-0 relative">
-                <img
-                  src={getImageSrc()}
-                  alt="profile"
-                  className="w-24 h-24 rounded-full object-cover border-2"
-                  style={{ borderColor: customColor }}
-                  onError={(e) => (e.currentTarget.src = "/uploads/pic.png")}
-                />
+                {showImg ? (
+                  <img
+                    src={imageSrc}
+                    alt="profile"
+                    className="w-24 h-24 rounded-full object-cover border-2"
+                    style={{ borderColor: customColor }}
+                    onError={() => setImgError(true)}
+                  />
+                ) : (
+                  <InitialAvatar
+                    name={profile.name || current?.name}
+                    email={profile.email || current?.email}
+                    size={96}
+                    className="border-2"
+                  />
+                )}
+
                 {isEditing && (
                   <>
                     <label
                       htmlFor="profile-upload"
                       className="absolute bottom-0 right-0 bg-[#AA405B] text-white p-1 rounded-full cursor-pointer"
+                      title="Choose new photo"
                     >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-5 w-5"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                         <path
                           fillRule="evenodd"
                           d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z"
@@ -305,18 +356,9 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                         />
                       </svg>
                     </label>
-                    <input
-                      id="profile-upload"
-                      type="file"
-                      accept="image/*"
-                      className="hidden"
-                      onChange={handleFileSelect}
-                    />
+                    <input id="profile-upload" type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
                     {selectedFile && (
-                      <button
-                        onClick={uploadProfileImage}
-                        className="mt-2 px-4 py-1 bg-[#AA405B] text-white rounded text-sm"
-                      >
+                      <button onClick={uploadProfileImage} className="mt-2 px-4 py-1 bg-[#AA405B] text-white rounded text-sm">
                         Upload Image
                       </button>
                     )}
@@ -328,35 +370,17 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                 {isEditing ? (
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Full Name
-                      </label>
-                      <input
-                        type="text"
-                        name="name"
-                        value={profile.name}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Full Name</label>
+                      <input type="text" name="name" value={profile.name} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Position
-                      </label>
-                      <input
-                        type="text"
-                        name="position"
-                        value={profile.position}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Position</label>
+                      <input type="text" name="position" value={profile.position} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                   </div>
                 ) : (
                   <div>
-                    <h4 className="text-xl font-bold">
-                      {profile.name || "—"}
-                    </h4>
+                    <h4 className="text-xl font-bold">{profile.name || "—"}</h4>
                     <p className="text-gray-600">{profile.position || "—"}</p>
                   </div>
                 )}
@@ -378,16 +402,8 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                 {isEditing ? (
                   <>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        name="email"
-                        value={profile.email}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Email</label>
+                      <input type="email" name="email" value={profile.email} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
 
                     {/* Change Password */}
@@ -417,10 +433,7 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                           onChange={(e) => setNewPw2(e.target.value)}
                           className="w-full p-2 border rounded"
                         />
-                        <button
-                          onClick={changePassword}
-                          className="px-4 py-2 rounded bg-[#AA405B] text-white"
-                        >
+                        <button onClick={changePassword} className="px-4 py-2 rounded bg-[#AA405B] text-white">
                           Update Password
                         </button>
                       </div>
@@ -430,9 +443,7 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                   <>
                     <div>
                       <p className="text-sm text-gray-500">Email</p>
-                      <p className="font-medium break-all">
-                        {profile.email || "—"}
-                      </p>
+                      <p className="font-medium break-all">{profile.email || "—"}</p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">Password</p>
@@ -455,28 +466,12 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                 {isEditing ? (
                   <>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Phone
-                      </label>
-                      <input
-                        type="text"
-                        name="phone"
-                        value={profile.phone}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Phone</label>
+                      <input type="text" name="phone" value={profile.phone} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Address
-                      </label>
-                      <input
-                        type="text"
-                        name="address"
-                        value={profile.address}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Address</label>
+                      <input type="text" name="address" value={profile.address} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                   </>
                 ) : (
@@ -487,9 +482,7 @@ await fetch(`${API_BASE}/api/upload-profile-image?user_id=${userId}`, { method: 
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">Address</p>
-                      <p className="font-medium break-words">
-                        {profile.address || "—"}
-                      </p>
+                      <p className="font-medium break-words">{profile.address || "—"}</p>
                     </div>
                   </>
                 )}

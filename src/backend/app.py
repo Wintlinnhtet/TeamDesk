@@ -146,7 +146,7 @@ def get_request_user_oid():
     return to_object_id(uid) if uid else None
 
 def _public_user_doc(u):
-    img = u.get("profileImage") or u.get("profileImageUrl") or "/uploads/pic.png"
+    img = (u.get("profileImage") or "").strip() 
     return {
         "id": str(u["_id"]),
         "name": u.get("name", ""),
@@ -169,13 +169,7 @@ def api_profile():
         return jsonify({"error": "User not found"}), 404
 
     # 2) If profileImage is missing, set a default once and reflect it in the response
-    if not u.get("profileImage"):
-        users_collection.update_one(
-            {"_id": uid},
-            {"$set": {"profileImage": "/uploads/pic.png", "updated_at": datetime.utcnow()}}
-        )
-        u["profileImage"] = "/uploads/pic.png"
-
+   
     if request.method == "GET":
         return jsonify(_public_user_doc(u)), 200
 
@@ -675,10 +669,12 @@ def signin():
             "name": user.get("name"),
             "email": user.get("email"),
             "role": user.get("role"),
+            "profileImage": user.get("profileImage", ""),
             "alreadyRegister": user.get("alreadyRegister", False)  # 🔥 include boolean
         }
     })
 
+# -------------------- USERS (lookup by ids) --------------------
 # -------------------- USERS (lookup by ids) --------------------
 @app.get("/users")
 def get_users_by_ids():
@@ -696,24 +692,27 @@ def get_users_by_ids():
     if not oids:
         return jsonify([]), 200
 
+    # ✅ include profileImage in projection
     cursor = users_collection.find(
         {"_id": {"$in": oids}},
-        {"email": 1, "name": 1, "picture": 1, "avatar": 1, "avatar_url": 1, "profile": 1}
+        {"email": 1, "name": 1, "profileImage": 1, "picture": 1, "avatar": 1, "avatar_url": 1, "profile": 1}
     )
 
     out = []
     for u in cursor:
+        # ✅ prefer profileImage, then other possible fields
+        pic = (
+            (u.get("profileImage") or "").strip()
+            or (u.get("picture") or "").strip()
+            or ((u.get("profile") or {}).get("photo") or "").strip()
+            or (u.get("avatar_url") or "").strip()
+            or (u.get("avatar") or "").strip()
+        )
         out.append({
             "_id": str(u["_id"]),
             "email": u.get("email", ""),
             "name": u.get("name", ""),
-            "picture": (
-                u.get("picture")
-                or (u.get("profile") or {}).get("photo")
-                or u.get("avatar_url")
-                or u.get("avatar")
-                or ""
-            )
+            "picture": pic,  # frontend will prefix API_BASE for /uploads/*
         })
     return jsonify(out), 200
 
@@ -746,7 +745,7 @@ def list_members():
             pass
 
     base_filter = {"role": {"$nin": ["admin", "superadmin", "owner"]}}
-    projection = {"email": 1, "name": 1, "avatar": 1, "avatar_url": 1, "picture": 1, "profile": 1, "role": 1}
+    projection = {"email": 1, "name": 1, "avatar": 1, "avatar_url": 1, "picture": 1, "profile": 1, "role": 1,"profileImage": 1,}
 
     cursor = users_collection.find(base_filter, projection)
     out = []
@@ -766,6 +765,7 @@ def list_members():
                 u.get("avatar") or u.get("avatar_url") or
                 u.get("picture") or (u.get("profile") or {}).get("photo") or ""
             ),
+             "profileImage": u.get("profileImage", "")
         })
     return jsonify(out), 200
 
