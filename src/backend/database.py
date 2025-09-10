@@ -20,3 +20,9 @@ except Exception as e:
 def get_db():
     """Return the shared MongoDB database handle."""
     return db
+try:
+    import gridfs
+    fs = gridfs.GridFS(db)
+except Exception:
+    # If GridFS can't init, keep a None sentinel so imports still work.
+    fs = Non

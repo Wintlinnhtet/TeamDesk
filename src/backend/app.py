@@ -10,7 +10,7 @@ import re
 from werkzeug.utils import secure_filename
 import os
 from backend.extensions import socketio
-from backend.profile_backend import profile_bp
+
 # near other imports
 
 from bson import ObjectId
