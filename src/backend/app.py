@@ -101,6 +101,7 @@ CORS(
 )
 
 
+<<<<<<< HEAD
 
 # run once at boot and then every 10 minutes
 def _deadline_scan_job():
@@ -113,6 +114,8 @@ def _deadline_scan_job():
     except Exception:
         pass
 
+=======
+>>>>>>> 8c1a5a82c3f104ea33be42347d12d9b96172c5ce
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
     h = {
