@@ -81,7 +81,6 @@ CORS(
 )
 
 
-
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
     h = {

@@ -1,35 +1,132 @@
 import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import io from "socket.io-client";
-import { FaFolder, FaFileAlt, FaCloud, FaHdd } from "react-icons/fa";
+import {
+  FaFolder,
+  FaFileAlt,
+  FaFileExcel,
+  FaFileCsv,
+  FaFileCode,
+  FaFileImage,
+  FaFilePdf,
+  FaCloud,
+  FaHdd,
+} from "react-icons/fa";
 
 const API_URL = "http://localhost:5000/api";
 const SOCKET_URL = "http://localhost:5000/rt";
 
+// File icons mapping
+const fileIcons = {
+  py: FaFileCode,
+  js: FaFileCode,
+  java: FaFileCode,
+  html: FaFileCode,
+  css: FaFileCode,
+  jpg: FaFileImage,
+  jpeg: FaFileImage,
+  png: FaFileImage,
+  gif: FaFileImage,
+  bmp: FaFileImage,
+  xls: FaFileExcel,
+  xlsx: FaFileExcel,
+  csv: FaFileCsv,
+  pdf: FaFilePdf,
+};
+
+// File colors
+const fileColors = {
+  py: "text-yellow-500",
+  js: "text-yellow-400",
+  java: "text-red-500",
+  html: "text-orange-500",
+  css: "text-blue-500",
+  jpg: "text-green-500",
+  jpeg: "text-green-500",
+  png: "text-green-500",
+  gif: "text-green-400",
+  bmp: "text-green-300",
+  xls: "text-green-600",
+  xlsx: "text-green-600",
+  csv: "text-teal-600",
+  pdf: "text-red-600",
+};
+
+// Get file icon component with color
+function getFileIcon(filename) {
+  const ext = filename.split(".").pop().toLowerCase();
+  const Icon = fileIcons[ext] || FaFileAlt;
+  const colorClass = fileColors[ext] || "text-gray-500";
+  return <Icon className={`text-2xl ${colorClass}`} />;
+}
+
+// Helper to extract userId
+function getUserId() {
+  const rawUserId = localStorage.getItem("userId");
+  if (rawUserId) return rawUserId;
+
+  const rawUser = localStorage.getItem("user");
+  if (rawUser) {
+    try {
+      const parsed = JSON.parse(rawUser);
+      return parsed._id || parsed.id || null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function FileManager() {
   const [folders, setFolders] = useState([]);
+  const [projects, setProjects] = useState([]);
   const [activeFolder, setActiveFolder] = useState(null);
-  const [previewFile, setPreviewFile] = useState(null); // File for preview
+  const [previewFile, setPreviewFile] = useState(null);
+  const [showCreateFolderForm, setShowCreateFolderForm] = useState(false);
+  const [newFolderName, setNewFolderName] = useState("");
+  const [selectedProject, setSelectedProject] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const dropRef = useRef();
 
-  const userId = localStorage.getItem("userId") || "68a095c74b792955f29769f1"; 
-  axios.defaults.headers.common["X-User-Id"] = userId;
+  // ---------------- Fetch Projects & Folders ----------------
+  const fetchProjects = async () => {
+    const userId = getUserId();
+    if (!userId) return console.warn("⚠️ No userId in localStorage");
+    try {
+      const res = await axios.get(`${API_URL}/projects`, {
+        headers: { "X-User-Id": userId },
+      });
+      setProjects(res.data.projects || []);
+    } catch (err) {
+      console.error("❌ Failed to fetch projects:", err.response?.data || err);
+      alert("Failed to fetch projects");
+    }
+  };
 
   const fetchFolders = async () => {
+    const userId = getUserId();
+    if (!userId) return console.warn("⚠️ No userId in localStorage");
     try {
-      const res = await axios.get(`${API_URL}/folders`);
+      const res = await axios.get(`${API_URL}/folders`, {
+        headers: { "X-User-Id": userId },
+      });
       setFolders(res.data.folders || []);
     } catch (err) {
-      console.error("Failed to fetch folders:", err.response?.data || err);
+      console.error("❌ Failed to fetch folders:", err.response?.data || err);
       alert("Failed to fetch folders");
     }
   };
 
   useEffect(() => {
+    fetchProjects();
     fetchFolders();
+
     const socket = io(SOCKET_URL);
+
     socket.on("folder:created", (folder) => setFolders((prev) => [folder, ...prev]));
-    socket.on("folder:deleted", ({ _id }) => setFolders((prev) => prev.filter((f) => f._id !== _id)));
+    socket.on("folder:deleted", ({ _id }) =>
+      setFolders((prev) => prev.filter((f) => f._id !== _id))
+    );
     socket.on("file:uploaded", (fileDoc) => {
       setFolders((prev) =>
         prev.map((f) =>
@@ -48,116 +145,222 @@ function FileManager() {
         )
       );
     });
+
     return () => socket.disconnect();
   }, []);
 
+  // ---------------- Create Folder ----------------
   const handleCreateFolder = async () => {
-    const name = prompt("Enter folder name:");
-    if (!name?.trim()) return;
+    const userId = getUserId();
+    if (!userId) return alert("Not logged in!");
+    if (!newFolderName.trim() || !selectedProject)
+      return alert("Folder name and project must be selected");
+
+    const payload = {
+      name: newFolderName.trim(),
+      project_id: selectedProject,
+    };
+
     try {
-      await axios.post(`${API_URL}/folders`, { name });
+      const res = await axios.post(`${API_URL}/folders`, payload, {
+        headers: { "X-User-Id": userId },
+      });
+      alert(`Folder "${res.data.name}" created successfully!`);
+      setNewFolderName("");
+      setSelectedProject("");
+      setShowCreateFolderForm(false);
+      setFolders((prev) => [res.data, ...prev]);
     } catch (err) {
-      console.error("Create folder error:", err.response?.data || err);
-      alert(err.response?.data?.error || "Failed to create folder");
+      const errorMsg = err.response?.data?.error || "Failed to create folder";
+      alert(`Error: ${errorMsg}`);
     }
   };
 
-  const handleUpload = async (file, folderId) => {
-    if (!file || !folderId) return alert("Select a folder first!");
+  // ---------------- Upload File ----------------
+  const handleUpload = async (files, folderId) => {
+    const userId = getUserId();
+    if (!userId) return alert("Not logged in!");
+    if (!files || !files.length || !folderId) return alert("Select a folder first!");
+
     const formData = new FormData();
-    formData.append("file", file);
+    for (let i = 0; i < files.length; i++) formData.append("file", files[i]);
+
     try {
       await axios.post(`${API_URL}/folders/${folderId}/files`, formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+        headers: { "Content-Type": "multipart/form-data", "X-User-Id": userId },
       });
+      alert("Files uploaded successfully!");
     } catch (err) {
-      console.error("Upload file error:", err.response?.data || err);
-      alert(err.response?.data?.error || "Failed to upload file");
+      alert(err.response?.data?.error || "Failed to upload files");
     }
   };
 
   const handleFileSelect = (folderId) => {
     const fileInput = document.createElement("input");
     fileInput.type = "file";
-    fileInput.onchange = (e) => handleUpload(e.target.files[0], folderId);
+    fileInput.multiple = true;
+    fileInput.onchange = (e) => handleUpload(e.target.files, folderId);
     fileInput.click();
   };
 
-  const handleDeleteFile = async (fileId) => {
+  const handleDeleteFile = async (fileId, filename) => {
+    const userId = getUserId();
+    if (!userId) return alert("Not logged in!");
+    if (!window.confirm(`Delete file "${filename}"?`)) return;
+
     try {
-      await axios.delete(`${API_URL}/files/${fileId}`);
+      await axios.delete(`${API_URL}/files/${fileId}`, {
+        headers: { "X-User-Id": userId },
+      });
+      setFolders((prev) =>
+        prev.map((f) => ({
+          ...f,
+          files: f.files.filter((f) => f._id !== fileId),
+        }))
+      );
+      alert("File deleted successfully");
     } catch (err) {
-      console.error("Delete file error:", err.response?.data || err);
-      alert("Failed to delete file");
+      alert(err.response?.data?.error || "Failed to delete file");
     }
   };
 
-  // -------------------- DOWNLOAD --------------------
   const handleDownload = async (fileId, filename) => {
+    const userId = getUserId();
+    if (!userId) return alert("Not logged in!");
     try {
-      const res = await axios.get(`${API_URL}/files/${fileId}`, { responseType: "blob" });
-      const url = window.URL.createObjectURL(res.data);
+      const res = await axios.get(`${API_URL}/files/${fileId}`, {
+        headers: { "X-User-Id": userId },
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data]);
+      const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       link.setAttribute("download", filename);
       document.body.appendChild(link);
       link.click();
       link.remove();
+      window.URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Download error:", err.response?.data || err);
-      alert("Failed to download file");
+      alert(err.response?.data?.error || "Failed to download file");
     }
   };
 
-  // -------------------- PREVIEW --------------------
   const handlePreview = async (fileId, filename) => {
+    const userId = getUserId();
+    if (!userId) return alert("Not logged in!");
     try {
-      const res = await axios.get(`${API_URL}/files/${fileId}`, { responseType: "blob" });
-      const blobUrl = window.URL.createObjectURL(res.data);
+      const res = await axios.get(`${API_URL}/files/${fileId}`, {
+        headers: { "X-User-Id": userId },
+        responseType: "blob",
+      });
+      const blob = new Blob([res.data], { type: res.data.type || "application/octet-stream" });
+      const blobUrl = window.URL.createObjectURL(blob);
       setPreviewFile({ url: blobUrl, name: filename });
     } catch (err) {
-      console.error("Preview error:", err.response?.data || err);
-      alert("Failed to preview file");
+      alert(err.response?.data?.error || "Failed to preview file");
     }
   };
 
   const handleDrop = (e) => {
     e.preventDefault();
     if (!activeFolder) return alert("Select a folder first!");
-    handleUpload(e.dataTransfer.files[0], activeFolder);
+    handleUpload(e.dataTransfer.files, activeFolder);
   };
   const handleDragOver = (e) => e.preventDefault();
+
+  // ---------------- Filter Folders & Files by Search ----------------
+  const filteredFolders = folders.filter((f) =>
+    f.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredFiles = folders
+    .find((f) => f._id === activeFolder)
+    ?.files.filter((file) =>
+      file.filename.toLowerCase().includes(searchQuery.toLowerCase())
+    );
 
   return (
     <div className="min-h-screen bg-white px-8 py-10">
       <h1 className="text-2xl font-bold mb-6">📂 File Manager</h1>
 
+      <input
+        type="text"
+        placeholder="Search folders/files..."
+        value={searchQuery}
+        onChange={(e) => setSearchQuery(e.target.value)}
+        className="w-full mb-4 p-2 border rounded"
+      />
+
+      {/* Create Folder */}
       <div className="flex gap-3 mb-6">
         <button
-          onClick={handleCreateFolder}
+          onClick={() => setShowCreateFolderForm(!showCreateFolderForm)}
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
         >
           Create Folder
         </button>
       </div>
 
-      {/* ------------------ Folder List ------------------ */}
+      {showCreateFolderForm && (
+        <div className="mb-6 p-4 border rounded bg-gray-100 w-full max-w-md">
+          <input
+            type="text"
+            placeholder="Folder Name"
+            value={newFolderName}
+            onChange={(e) => setNewFolderName(e.target.value)}
+            className="w-full mb-2 p-2 border rounded"
+          />
+          <select
+            value={selectedProject}
+            onChange={(e) => setSelectedProject(e.target.value)}
+            className="w-full mb-2 p-2 border rounded"
+          >
+            <option value="">Select Project</option>
+            {projects.map((p) => (
+              <option key={p._id} value={p._id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <button
+            onClick={handleCreateFolder}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+          >
+            Create
+          </button>
+        </div>
+      )}
+
+      {/* Folder List */}
       <div className="flex flex-wrap gap-4 mb-6">
-        {folders.map((folder) => (
+        {filteredFolders.map((folder) => (
           <div
             key={folder._id}
-            onClick={() => setActiveFolder(folder._id)}
-            className={`cursor-pointer px-4 py-2 rounded border ${
-              activeFolder === folder._id ? "bg-blue-100 border-blue-600" : "bg-gray-100 border-gray-300"
-            } flex items-center gap-2`}
+            className={`cursor-pointer px-4 py-2 rounded border flex items-center gap-2 ${
+              activeFolder === folder._id
+                ? "bg-blue-100 border-blue-600"
+                : "bg-gray-100 border-gray-300"
+            }`}
           >
-            <FaFolder className="text-blue-500" /> {folder.name}
+            <FaFolder className="text-blue-500" />
+            <span onClick={() => setActiveFolder(folder._id)}>{folder.name}</span>
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDeleteFolder(folder._id);
+              onClick={async () => {
+                if (!window.confirm(`Delete folder "${folder.name}"?`)) return;
+                const userId = getUserId();
+                try {
+                  await axios.delete(`${API_URL}/folders/${folder._id}`, {
+                    headers: { "X-User-Id": userId },
+                  });
+                  setFolders((prev) => prev.filter((f) => f._id !== folder._id));
+                  if (activeFolder === folder._id) setActiveFolder(null);
+                  alert("Folder deleted successfully");
+                } catch (err) {
+                  alert(err.response?.data?.error || "Failed to delete folder");
+                }
               }}
-              className="ml-2 px-2 py-0.5 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+              className="ml-auto px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs"
             >
               Delete
             </button>
@@ -165,7 +368,7 @@ function FileManager() {
         ))}
       </div>
 
-      {/* ------------------ Files for active folder ------------------ */}
+      {/* Files */}
       {activeFolder && (
         <div>
           <div
@@ -184,10 +387,13 @@ function FileManager() {
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {folders.find((f) => f._id === activeFolder)?.files.map((file) => (
-              <div key={file._id} className="p-3 bg-white border rounded shadow flex flex-col gap-2">
+            {filteredFiles?.map((file) => (
+              <div
+                key={file._id}
+                className="p-3 bg-white border rounded shadow flex flex-col gap-2"
+              >
                 <div className="flex items-center gap-1 mb-1">
-                  <FaFileAlt className="text-blue-500 text-2xl" />
+                  {getFileIcon(file.filename)}
                   {file.storage === "gridfs" ? (
                     <FaCloud title="GridFS Storage" className="text-green-500" />
                   ) : (
@@ -209,7 +415,7 @@ function FileManager() {
                     Preview
                   </button>
                   <button
-                    onClick={() => handleDeleteFile(file._id)}
+                    onClick={() => handleDeleteFile(file._id, file.filename)}
                     className="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs"
                   >
                     Delete
@@ -221,30 +427,24 @@ function FileManager() {
         </div>
       )}
 
-      {/* ------------------ Preview Modal ------------------ */}
+      {/* Preview Modal */}
       {previewFile && (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-      <div className="bg-white p-4 rounded w-3/4 h-3/4 overflow-auto">
-        <div className="flex justify-between items-center mb-2">
-          <h2 className="font-bold">{previewFile.name}</h2>
-          <button className="px-2 py-1 bg-red-600 text-white rounded"
-                  onClick={() => setPreviewFile(null)}>Close</button>
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
+          <div className="bg-white p-4 rounded w-3/4 h-3/4 overflow-auto">
+            <div className="flex justify-between items-center mb-2">
+              <h2 className="font-bold">{previewFile.name}</h2>
+              <button
+                className="px-2 py-1 bg-red-600 text-white rounded"
+                onClick={() => setPreviewFile(null)}
+              >
+                Close
+              </button>
+            </div>
+            <iframe src={previewFile.url} className="w-full h-full"></iframe>
+          </div>
         </div>
-
-        {previewFile.type === "image" && (
-          <img src={previewFile.url} alt={previewFile.name} className="w-full h-full object-contain" />
-        )}
-        {previewFile.type === "pdf" && (
-          <iframe src={previewFile.url} className="w-full h-full"></iframe>
-        )}
-        {previewFile.type === "text" && (
-          <pre className="overflow-auto text-sm">{previewFile.content}</pre>
-        )}
-      </div>
+      )}
     </div>
-  )}
-
-      </div>
   );
 }
 
