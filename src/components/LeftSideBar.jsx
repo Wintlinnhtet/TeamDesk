@@ -1,5 +1,6 @@
 // LeftSideBar.js
 import React from "react";
+import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   FaTachometerAlt,
@@ -18,6 +19,62 @@ const LeftSideBar = () => {
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const role = (user && user.role) || "member";
   const isAdmin = role.toLowerCase() === "admin";
+
+  // State to hold notification count
+const [notifications, setNotifications] = useState(0);
+
+// Fetch announcements for the badge
+// useEffect(() => {
+//   const fetchNotifications = async () => {
+//     try {
+//       const res = await fetch("http://localhost:5000/api/announcement");
+//       const data = await res.json();
+//       const announcements = data.success ? data.announcements : data;
+//       const unread = announcements.filter(
+//         (a) => a.sendTo === "all" || a.sendTo === role
+//       ).length;
+//       setNotifications(unread); // 🔥 Update notification count
+//     } catch (err) {
+//       console.error("Error fetching announcements:", err);
+//     }
+//   };
+
+//   fetchNotifications();
+//   const interval = setInterval(fetchNotifications, 30000); // refresh every 30s
+//   return () => clearInterval(interval);
+// }, [role]);
+
+
+useEffect(() => {
+  const fetchNotifications = async () => {
+    try {
+      const res = await fetch(`http://localhost:5000/api/announcement/unread/${user._id}/${role}`);
+      const data = await res.json();
+      setNotifications(data.count);
+    } catch (err) {
+      console.error("Error fetching announcements:", err);
+    }
+  };
+
+  fetchNotifications();
+  const interval = setInterval(fetchNotifications, 30000); // refresh every 30s
+  return () => clearInterval(interval);
+}, [user._id, role]);
+
+
+const handleAnnouncementClick = async () => {
+  try {
+    await fetch(`http://localhost:5000/api/announcement/read-all/${user._id}`, {
+      method: "PUT"
+    });
+    setNotifications(0); // clear instantly
+    navigate("/announcement");
+  } catch (err) {
+    console.error("Error marking announcements as read:", err);
+  }
+};
+
+
 
   const onLogout = () => {
     try {
@@ -94,16 +151,42 @@ const LeftSideBar = () => {
                 <span className={baseText}>Members</span>
               </Link>
             </li>
-            <li className="mb-5"> {/* Added margin-bottom to create space between Members and the bottom items */}
-            <Link 
-              to="/announcement" 
-              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
-              style={{ color: customColor }} // Custom color for text
-            >
-              <FaBullhorn className="text-xl" />
-              <span>Announcement</span>
-            </Link>
-          </li>
+            <li className="mb-5">
+  <button
+    onClick={handleAnnouncementClick}
+    className="w-full text-left text-lg p-3 rounded-md flex items-center space-x-2 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+    style={{ color: customColor }}
+  >
+    <FaBullhorn className="text-xl" />
+    <span className="flex items-center space-x-2">
+      <span>Announcement</span>
+      {notifications > 0 && (
+        <span className="ml-2 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
+          {notifications}
+        </span>
+      )}
+    </span>
+  </button>
+</li>
+
+            {/* <li className="mb-5">
+  <Link 
+    to="/announcement" 
+    className="text-lg p-3 rounded-md flex items-center space-x-2 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+    style={{ color: customColor }}
+  >
+    <FaBullhorn className="text-xl" />
+    <span className="flex items-center space-x-2">
+      <span>Announcement</span>
+      {notifications > 0 &&  (
+        <span className="ml-2 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
+          {notifications}
+        </span>
+      )}
+    </span>
+  </Link>
+</li> */}
+
           
         </ul>
       </nav>

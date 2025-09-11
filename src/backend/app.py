@@ -1390,7 +1390,8 @@ def save_announcement():
             "message": message,
             "sendTo": send_to,
             "image": filename,
-            "createdAt": datetime.utcnow()
+            "createdAt": datetime.utcnow(),
+            "readBy": []
         }
 
         result = announcement_collection.insert_one(announcement)
@@ -1519,6 +1520,66 @@ def delete_user(user_id):
         return jsonify({"message": "User deleted successfully"}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+
+@app.route("/api/user/<user_id>", methods=["GET"])
+def get_user_profile(user_id):
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        # 🔥 Build response from your actual schema
+        user_data = {
+            "id": str(user["_id"]),
+            "name": user.get("name", ""),
+            "email": user.get("email", ""),
+            "phone": user.get("phone", ""),
+            "dob": user.get("dob", ""),
+            "role": user.get("role", ""),
+            "position": user.get("position", ""),
+            "experience": user.get("experience", ""),  # might be JSON string
+            "address": user.get("address", ""),
+            "alreadyRegister": user.get("alreadyRegister", False),
+            "profileImage": f"http://localhost:5000/uploads/{user['profileImage']}"
+                            if user.get("profileImage") else None,
+        }
+
+        return jsonify({"success": True, "user": user_data})
+
+    except Exception as e:
+        print("Error in get_user_profile:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+   # Mark all as read for a user
+@app.route("/api/announcement/read-all/<user_id>", methods=["PUT"])
+def mark_all_as_read(user_id):
+    try:
+        result = announcement_collection.update_many(
+            {"readBy": {"$ne": user_id}},   # not read by this user
+            {"$addToSet": {"readBy": user_id}}
+        )
+        return jsonify({"success": True, "modified": result.modified_count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# Get unread announcements count
+@app.route("/api/announcement/unread/<user_id>/<role>", methods=["GET"])
+def unread_count(user_id, role):
+    try:
+        count = announcement_collection.count_documents({
+            "readBy": {"$ne": user_id},
+            "$or": [
+                {"sendTo": "all"},
+                {"sendTo": role}
+            ]
+        })
+        return jsonify({"count": count})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+     
 
 
 # -------------------- bind to LAN --------------------

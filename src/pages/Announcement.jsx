@@ -93,6 +93,8 @@ const Announcement = () => {
 
   const navigate = useNavigate();
 
+  
+
   // ✅ fetch announcements
   useEffect(() => {
     const fetchAnnouncements = async () => {
@@ -171,6 +173,16 @@ const Announcement = () => {
           alt="Announcement"
           className="w-full h-[250px] object-cover rounded-lg shadow-md"
         />
+        {/* <Image
+  src={
+    a.image && a.image.trim() !== ""
+      ? a.image // ✅ already full URL
+      : "/default-announcement.png" // ✅ default image
+  }
+  alt="Announcement"
+  className="w-full h-[250px] object-cover rounded-lg shadow-md"
+/> */}
+
         <Content>
           <Title>{a.title}</Title>
           <p style={{ fontSize: "0.8rem", color: "#555", margin: "0 0 0.4rem 0" }}>
