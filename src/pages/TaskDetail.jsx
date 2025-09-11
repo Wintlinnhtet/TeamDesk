@@ -3,6 +3,32 @@ import React, { useEffect, useState, useMemo } from "react";
 import { FaArrowLeft, FaUserAlt, FaUsers, FaCalendarCheck, FaCheckCircle, FaLock } from "react-icons/fa";
 import { useNavigate, useParams } from "react-router-dom";
 import { API_BASE } from "../config";
+// Build absolute URL for "/uploads/..." or plain filenames
+const buildImageUrl = (v) => {
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`;
+  if (!v.startsWith("/") && v.match(/\.(png|jpe?g|gif|webp|avif)$/i)) {
+    return `${API_BASE}/uploads/${v}`;
+  }
+  return v;
+};
+const mostLikely = (arr = []) => {
+  const freq = new Map();
+  for (const r of arr) if (r) freq.set(r, (freq.get(r) || 0) + 1);
+  let best = ""; let bestN = 0;
+  for (const [k, n] of freq) if (n > bestN) { best = k; bestN = n; }
+  return best;
+};
+
+const normId = (x) => {
+  if (!x) return null;
+  if (typeof x === "object") {
+    if (x.$oid) return String(x.$oid);
+    if (x._id)  return normId(x._id);
+  }
+  try { return String(x); } catch { return null; }
+};
 
 /** Prefer numeric progress when >0; otherwise parse from status (e.g., "todo,48", "in_progress 60%"). */
 function deriveProgress(task) {
@@ -40,6 +66,8 @@ const TaskDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState(0);
+  const [teamMembers, setTeamMembers] = useState([]); // [{_id, name, email, img, role}]
+
   const navigate = useNavigate();
 
   const locked = useMemo(() => {
@@ -86,6 +114,72 @@ const TaskDetail = () => {
 
         setTaskDetail(taskData);
         setProjectDetail(projData);
+        // ...inside fetchTaskDetail(), after setProjectDetail(projData);
+const loadMembers = async (proj) => {
+  // ---- Build teammates with profile image + role (DO THIS INSIDE fetchTaskDetail) ----
+// --- Hydrate teammates: profile image + most likely project_role ---
+try {
+  const rawMembers = Array.isArray(projData.members) ? projData.members : [];
+  const memberIds = [...new Set(
+    rawMembers.map(m => normId(m?._id ?? m?.id ?? m)).filter(Boolean)
+  )];
+
+  if (memberIds.length) {
+    // 1) Fetch tasks in this project → assignee_id -> list of roles
+    const rt = await fetch(`${API_BASE}/tasks?project_id=${taskData.project_id}`, { credentials: "include" });
+    const tjson = await rt.json().catch(() => []);
+    const tasks = Array.isArray(tjson) ? tjson : (Array.isArray(tjson?.tasks) ? tjson.tasks : []);
+
+    const rolesByUser = new Map();
+    for (const t of tasks) {
+      const uid  = String(t?.assignee_id || "");
+      const role = String(t?.project_role || "").trim();
+      if (!uid || !role) continue;
+      const arr = rolesByUser.get(uid) || [];
+      arr.push(role);
+      rolesByUser.set(uid, arr);
+    }
+
+    // 2) Fetch user docs for avatars (backend returns `picture` preferring profileImage)
+    const url = new URL(`${API_BASE}/users`);
+    url.searchParams.set("ids", memberIds.join(","));
+    const ru = await fetch(url.toString(), { credentials: "include" });
+    const ujson = await ru.json().catch(() => []);
+
+    const byId = new Map();
+    if (Array.isArray(ujson)) {
+      for (const u of ujson) {
+        const id = normId(u?._id);
+        if (!id) continue;
+        byId.set(id, {
+          _id: id,
+          name: u?.name || u?.email || "Member",
+          email: u?.email || "",
+          img: buildImageUrl(u?.picture || ""), // make absolute
+        });
+      }
+    }
+
+    // 3) Merge: memberIds × {picture, mostLikely(role)}
+    const final = memberIds.map(id => {
+      const base = byId.get(id) || { _id: id, name: "Member", email: "", img: "" };
+      const role = mostLikely(rolesByUser.get(String(id)) || []);
+      return { ...base, role: role || "Member" };
+    });
+
+    setTeamMembers(final);
+  } else {
+    setTeamMembers([]);
+  }
+} catch {
+  setTeamMembers([]);
+}
+
+
+};
+
+await loadMembers(projData);
+
         setLeaderDetail(leaderData);
 
         // initialize the slider from the DB
@@ -185,6 +279,10 @@ const handleCompleteTask = async () => {
 
   const statusLabel = progress === 100 ? "completed" : `${progress}% completed`;
 
+
+
+ // If you already built teamMembers via loadMembers(), enhance with role; otherwise build now
+
   return (
     <div className="max-w-7xl mx-auto p-6 bg-white rounded-lg shadow-xl">
       <button onClick={() => navigate(-1)} className="text-blue-500 hover:text-blue-700 mb-4 flex items-center">
@@ -224,21 +322,29 @@ const handleCompleteTask = async () => {
             <FaUsers className="text-3xl mr-4" />
             <h3 className="text-xl font-semibold">Teammates</h3>
           </div>
-          <ul className="space-y-2">
-            {projectDetail.members && projectDetail.members.length > 0 ? (
-              projectDetail.members.map((member) => (
-                <li key={member._id} className="flex items-center space-x-3">
-                  <img src="https://via.placeholder.com/40" alt="profile" className="rounded-full w-10 h-10" />
-                  <div>
-                    <p className="text-md">{member.name || member.email || "Member"}</p>
-                    <p className="text-sm text-gray-300">{member.project_role || "No role assigned"}</p>
-                  </div>
-                </li>
-              ))
-            ) : (
-              <li>No teammates assigned</li>
-            )}
-          </ul>
+      <ul className="space-y-2">
+  {teamMembers.length > 0 ? (
+    teamMembers.map((m) => (
+      <li key={m._id} className="flex items-center space-x-3">
+        {m.img ? (
+          <img src={m.img} alt="" className="rounded-full w-10 h-10 object-cover" />
+        ) : (
+          <div className="rounded-full w-10 h-10 bg-white/20 flex items-center justify-center text-sm font-semibold">
+            {(m.name || m.email || "?").slice(0,1).toUpperCase()}
+          </div>
+        )}
+        <div>
+          <p className="text-md">{m.name}</p>
+          <p className="text-sm text-gray-300">{m.role || "Member"}</p>
+        </div>
+      </li>
+    ))
+  ) : (
+    <li>No teammates assigned</li>
+  )}
+</ul>
+
+
         </div>
       </div>
 

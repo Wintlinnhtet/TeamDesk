@@ -45,10 +45,25 @@ const [notifications, setNotifications] = useState(0);
 // }, [role]);
 
 
+// useEffect(() => {
+//   const fetchNotifications = async () => {
+//     try {
+//       const res = await fetch(`http://localhost:5000/api/announcement/unread/${user._id}/${role}`);
+//       const data = await res.json();
+//       setNotifications(data.count);
+//     } catch (err) {
+//       console.error("Error fetching announcements:", err);
+//     }
+//   };
+
+//   fetchNotifications();
+//   const interval = setInterval(fetchNotifications, 30000); // refresh every 30s
+//   return () => clearInterval(interval);
+// }, [user._id, role]);
 useEffect(() => {
   const fetchNotifications = async () => {
     try {
-      const res = await fetch(`http://localhost:5000/api/announcement/unread/${user._id}/${role}`);
+      const res = await fetch(`http://localhost:5000/api/announcement/unread/${user._id}`);
       const data = await res.json();
       setNotifications(data.count);
     } catch (err) {
@@ -59,7 +74,9 @@ useEffect(() => {
   fetchNotifications();
   const interval = setInterval(fetchNotifications, 30000); // refresh every 30s
   return () => clearInterval(interval);
-}, [user._id, role]);
+}, [user._id]);
+
+
 
 
 const handleAnnouncementClick = async () => {
@@ -105,7 +122,7 @@ const handleAnnouncementClick = async () => {
           <li>
             <Link
               to={isAdmin ? "/admin" : "/dashboard"}
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaTachometerAlt className={`text-xl ${baseText}`} />
@@ -117,7 +134,7 @@ const handleAnnouncementClick = async () => {
           <li>
             <Link
               to={isAdmin ? "/tasks_admin" : "/tasks"}
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaTasks className={`text-xl ${baseText}`} />
@@ -131,7 +148,7 @@ const handleAnnouncementClick = async () => {
           <li>
             <Link
               to="/file-sharing"
-              className={`${baseItem} hover:bg-[${customColor}]`}
+              className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
               style={{ color: customColor }}
             >
               <FaShareAlt className={`text-xl ${baseText}`} />
@@ -144,8 +161,8 @@ const handleAnnouncementClick = async () => {
             <li className="mb-5">
               <Link
                 to="/members"
-                className={`${baseItem} hover:bg-[${customColor}]`}
-                style={{ color: customColor }}
+                className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+              style={{ color: customColor }}
               >
                 <FaUsers className={`text-xl ${baseText}`} />
                 <span className={baseText}>Members</span>
@@ -160,7 +177,7 @@ const handleAnnouncementClick = async () => {
     <FaBullhorn className="text-xl" />
     <span className="flex items-center space-x-2">
       <span>Announcement</span>
-      {notifications > 0 && (
+      {notifications > 0 && !isAdmin && (
         <span className="ml-2 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
           {notifications}
         </span>
@@ -195,8 +212,8 @@ const handleAnnouncementClick = async () => {
       <div className="mt-10 space-y-3">
         <Link
           to="/profile"
-          className={`${baseItem} text-sm hover:bg-[${customColor}]`}
-          style={{ color: customColor }}
+         className="text-lg p-3 rounded-md block flex items-center space-x-3 transition-all transform hover:scale-105 hover:bg-customColor hover:text-white shadow-md"
+              style={{ color: customColor }}
         >
           <FaCog className={`text-xl ${baseText}`} />
           <span className={baseText}>Settings</span>
@@ -204,7 +221,7 @@ const handleAnnouncementClick = async () => {
 
         <button
           onClick={onLogout}
-          className={`${baseItem} text-sm hover:bg-[${customColor}] w-full text-left`}
+          className={`${baseItem} text-sm  w-full text-left`}
           style={{ color: customColor }}
         >
           <FaSignOutAlt className={`text-xl ${baseText}`} />

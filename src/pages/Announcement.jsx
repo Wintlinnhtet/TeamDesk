@@ -4,6 +4,17 @@ import { Link } from "react-router-dom";
 import { FaSearch } from 'react-icons/fa';
 import { MdCampaign } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
+// put this near imports (or import from a config)
+const API_BASE = "http://localhost:5000";
+
+// Normalize DB image -> usable <img src>
+function buildAnnImageSrc(image) {
+  const v = (image || "").trim();
+  if (!v) return "/default-announcement.png";              // React /public fallback
+  if (/^https?:\/\//i.test(v)) return v;                   // absolute URL already
+  if (v.startsWith("/src/uploads/")) return `${API_BASE}${v}`; // stored as '/uploads/..'
+  return `${API_BASE}/src/uploads/${v}`;                       // bare filename -> uploads
+}
 
 const PageContainer = styled.div`
   max-width: 90vw;
@@ -88,6 +99,8 @@ const Announcement = () => {
   // ✅ get user from localStorage
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const role = (user && user.role) || "member";
+  const isLeader = user.isLeader || true;
+  
 
   const [searchTerm, setSearchTerm] = useState("");
 
@@ -112,21 +125,40 @@ const Announcement = () => {
   }, []);
 
   // ✅ filter announcements based on role
+  // let filteredAnnouncements = [];
+  // if (role === "admin") {
+  //   filteredAnnouncements = announcements;
+  // } else if (role === "leader") {
+  //   filteredAnnouncements = announcements.filter(
+  //     (a) => a.sendTo === "all" || a.sendTo === "team_leader"
+  //   );
+  // } else if (role === "member") {
+  //   filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
+  // }
+
+
+
   let filteredAnnouncements = [];
-  if (role === "admin") {
-    filteredAnnouncements = announcements;
-  } else if (role === "leader") {
-    filteredAnnouncements = announcements.filter(
-      (a) => a.sendTo === "all" || a.sendTo === "team_leader"
-    );
-  } else if (role === "member") {
-    filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
-  }
+
+if (role === "admin") {
+  // Admin sees everything
+  filteredAnnouncements = announcements;
+} else if (isLeader) {
+  // Leaders see announcements sent to 'all' or 'team_leader'
+  filteredAnnouncements = announcements.filter(
+    (a) => a.sendTo === "all" || a.sendTo === "team_leader"
+  );
+} else if (role === "member") {
+  // Normal members see only 'all'
+  filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
+}
+
+
 
   // ✅ New: filter announcements by search term
   const displayedAnnouncements = filteredAnnouncements.filter((a) =>
-    a.title.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  a.title.toLowerCase().includes(searchTerm.toLowerCase())
+);
 
   return (
     <PageContainer>
@@ -169,19 +201,10 @@ const Announcement = () => {
         style={{ display: "flex", alignItems: "center", flex: 1 }}
       >
         <Image
-          src={a.image ? a.image : "/default-announcement.png"} // ✅ fallback image
-          alt="Announcement"
-          className="w-full h-[250px] object-cover rounded-lg shadow-md"
-        />
-        {/* <Image
-  src={
-    a.image && a.image.trim() !== ""
-      ? a.image // ✅ already full URL
-      : "/default-announcement.png" // ✅ default image
-  }
+  src={buildAnnImageSrc(a.image)}
   alt="Announcement"
   className="w-full h-[250px] object-cover rounded-lg shadow-md"
-/> */}
+/>
 
         <Content>
           <Title>{a.title}</Title>

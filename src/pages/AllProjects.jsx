@@ -2,8 +2,16 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
-import { FiCheckCircle, FiEdit2, FiTrash2 } from "react-icons/fi";
+import useRealtime from "../hooks/useRealtime"; // add this import
 
+import { FiCheckCircle, FiEdit2, FiTrash2 } from "react-icons/fi";
+const buildAvatarSrc = (val) => {
+  const v = (val || "").trim();
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`;
+  return `${API_BASE}/uploads/${v}`; // bare filename -> assume uploads
+};
 const ENABLE_USER_LOOKUP = true;
 
 /* ---------------- helpers ---------------- */
@@ -221,7 +229,18 @@ function AllProjects({ forUserId }) {
       return [];
     }
   };
-
+const sockRef = useRealtime(null, {
+    onProjectProgress: (msg) => {
+      const { project_id, progress } = msg || {};
+      if (!project_id) return;
+      setItems((prev) =>
+        prev.map((p) => {
+          const id = p._id?.$oid || p._id;
+          return id === project_id ? { ...p, progress: Number(progress) || 0 } : p;
+        })
+      );
+    },
+      });
   // Toggle confirm -> PATCH { confirm: 1 | 0 }
   const toggleConfirm = async (project, next) => {
     const id = project._id?.$oid || project._id;
@@ -281,61 +300,73 @@ function AllProjects({ forUserId }) {
   };
 
   const resolveProjectMembers = async (projects) => {
-    const idSet = new Set();
-    if (ENABLE_USER_LOOKUP) {
-      projects.forEach((p) => {
-        const hasMembers = Array.isArray(p.members) && p.members.length > 0;
-        const hasEmails = Array.isArray(p.member_emails) && p.member_emails.length > 0;
-        if (!hasMembers && !hasEmails && Array.isArray(p.member_ids) && p.member_ids.length > 0) {
-          p.member_ids.forEach((oid) => {
-            const id = typeof oid === "object" && oid?.$oid ? oid.$oid : oid;
-            if (id) idSet.add(id);
-          });
-        }
-      });
-    }
+  const idSet = new Set();
+  if (ENABLE_USER_LOOKUP) {
+    projects.forEach((p) => {
+      const hasMembers = Array.isArray(p.members) && p.members.length > 0;
+      const hasEmails  = Array.isArray(p.member_emails) && p.member_emails.length > 0;
+      if (!hasMembers && !hasEmails && Array.isArray(p.member_ids) && p.member_ids.length > 0) {
+        p.member_ids.forEach((oid) => {
+          const id = typeof oid === "object" && oid?.$oid ? oid.$oid : oid;
+          if (id) idSet.add(id);
+        });
+      }
+    });
+  }
 
-    const profiles = idSet.size > 0 ? await fetchMembersByIds(Array.from(idSet)) : [];
-    const byId = new Map(
-      profiles.map((u) => [
+  const profiles = idSet.size > 0 ? await fetchMembersByIds(Array.from(idSet)) : [];
+  const byId = new Map(
+    profiles.map((u) => {
+      const raw =
+        u.profileImage ||      // ✅ NEW: uploaded profile path
+        u.picture ||           // legacy fields kept
+        u.avatar_url ||
+        u.avatar ||
+        (u.profile?.photo || "");
+      const finalUrl = buildAvatarSrc(raw);
+      return [
         String(u._id?.$oid || u._id || ""),
         {
           email: u.email,
-          name: u.name,
-          picture: u.picture || u.profile?.photo || u.avatar_url || u.avatar || "",
-          avatar: u.avatar || u.avatar_url || "",
+          name:  u.name,
+          picture: finalUrl,   // ✅ feed resolved URL into Avatar
+          avatar: ""           // we won't use this now
         },
-      ])
-    );
+      ];
+    })
+  );
 
-    return projects.map((p) => {
-      if (Array.isArray(p.members) && p.members.length > 0) {
-        return {
-          ...p,
-          _membersResolved: p.members.map((m) => ({
+  return projects.map((p) => {
+    if (Array.isArray(p.members) && p.members.length > 0) {
+      return {
+        ...p,
+        _membersResolved: p.members.map((m) => {
+          const raw = m.profileImage || m.picture || m.avatar_url || m.avatar || (m.profile?.photo || "");
+          return {
             email: m.email,
-            name: m.name,
-            picture: m.picture || m.profile?.photo || m.avatar_url || m.avatar || "",
-            avatar: m.avatar || m.avatar_url || "",
-          })),
-        };
-      }
-      if (Array.isArray(p.member_emails) && p.member_emails.length > 0) {
-        return {
-          ...p,
-          _membersResolved: p.member_emails.map((em) => ({ email: em, name: "", picture: "", avatar: "" })),
-        };
-      }
-      if (Array.isArray(p.member_ids) && p.member_ids.length > 0 && byId.size > 0) {
-        const members = p.member_ids
-          .map((oid) => String(typeof oid === "object" && oid?.$oid ? oid.$oid : oid))
-          .map((id) => byId.get(id))
-          .filter(Boolean);
-        return { ...p, _membersResolved: members };
-      }
-      return { ...p, _membersResolved: [] };
-    });
-  };
+            name:  m.name,
+            picture: buildAvatarSrc(raw),
+            avatar: ""
+          };
+        }),
+      };
+    }
+    if (Array.isArray(p.member_emails) && p.member_emails.length > 0) {
+      return {
+        ...p,
+        _membersResolved: p.member_emails.map((em) => ({ email: em, name: "", picture: "", avatar: "" })),
+      };
+    }
+    if (Array.isArray(p.member_ids) && p.member_ids.length > 0 && byId.size > 0) {
+      const members = p.member_ids
+        .map((oid) => String(typeof oid === "object" && oid?.$oid ? oid.$oid : oid))
+        .map((id) => byId.get(id))
+        .filter(Boolean);
+      return { ...p, _membersResolved: members };
+    }
+    return { ...p, _membersResolved: [] };
+  });
+};
 
   useEffect(() => {
     let mounted = true;
@@ -354,6 +385,14 @@ function AllProjects({ forUserId }) {
         const withMembers = await resolveProjectMembers(list);
         if (!mounted) return;
         setItems(withMembers);
+const s = sockRef.current;
+        if (s && Array.isArray(withMembers)) {
+          for (const p of withMembers) {
+            const id = p._id?.$oid || p._id;
+            if (id) s.emit("join", { projectId: String(id) });
+          }
+        }
+
       } catch (e) {
         setError(null);
       } finally {

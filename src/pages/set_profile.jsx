@@ -1,286 +1,322 @@
-// import React, { useState } from 'react';
+// src/frontend/components/Profile.jsx
+import React, { useEffect, useMemo, useState } from "react";
+import { API_BASE } from "../config";
 
-// const Profile = () => {
-//   const customColor = "#AA405B";
-  
-//   // State for profile data and edit mode
-//   const [profile, setProfile] = useState({
-//     name: "Kim Jee Yumm",
-//     role: "UI/UX Design Engineer",
-//     location: "North Korea, Communist",
-//     firstName: "Kim",
-//     email: "Kimjee215@gmail.com",
-//     jobRole: "Team Manager",
-//     country: "North Korea",
-//     postalCode: "ERT 2354"
-//   });
+/* Pull current user id from local/session storage */
+function getCurrentUser() {
+  try {
+    const ls = JSON.parse(localStorage.getItem("user") || "null");
+    const ss = JSON.parse(sessionStorage.getItem("user") || "null");
+    const raw = ls?.user || ls || ss?.user || ss || null;
+    if (!raw) return null;
+    return { id: String(raw._id || raw.id || ""), name: raw.name || "", email: raw.email || "" };
+  } catch {
+    return null;
+  }
+}
 
-//   const [isEditing, setIsEditing] = useState(false);
+/* First-letter avatar (uses name if possible, else email) */
+function InitialAvatar({ name, email, size = 64, className = "" }) {
+  const letter = useMemo(() => {
+    const src = (name || email || "?").trim();
+    return src ? src[0].toUpperCase() : "?";
+  }, [name, email]);
 
-//   // Handle input changes
-//   const handleChange = (e) => {
-//     const { name, value } = e.target;
-//     setProfile(prev => ({
-//       ...prev,
-//       [name]: value
-//     }));
-//   };
+  // simple background based on charCode for variety, deterministic
+  const hue = useMemo(() => ((letter.charCodeAt(0) || 65) * 13) % 360, [letter]);
+  const style = {
+    width: size,
+    height: size,
+    background: `hsl(${hue} 60% 85%)`,
+    color: `hsl(${hue} 50% 30%)`,
+  };
 
-//   // Toggle edit mode
-//   const toggleEdit = () => {
-//     setIsEditing(!isEditing);
-//   };
+  // if (!profile) return <p className="text-center mt-10">Loading profile...</p>;
 
-//   return (
-//     <div className="max-w-4xl mx-auto mt-10 bg-white rounded-2xl shadow-lg p-8 border-2" 
-//          style={{ borderColor: customColor }}>
-      
-//       {/* Header Section */}
-//       <div className="flex items-center justify-between mb-8">
-//         <div>
-//           <h2 className="text-2xl font-bold" style={{ color: customColor }}>Account Settings</h2>
-//           <p className="text-sm text-gray-600">Manage your profile and account settings</p>
-//         </div>
-//         <img src="profile.png" alt="profile icon" className="w-16 h-16" />
-//       </div>
+  return (
+    <div
+      className={`flex items-center justify-center rounded-full font-semibold select-none ${className}`}
+      style={style}
+      aria-label={`Avatar ${letter}`}
+    >
+      {letter}
+    </div>
+  );
+}
 
-//       <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
-//         {/* Main Content (now spans full width) */}
-//         <div className="md:col-span-4">
-//           {/* Profile Section */}
-//           <div className="mb-8 p-6 bg-gray-50 rounded-lg">
-//             <h3 className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1" 
-//                 style={{ color: customColor }}>
-//               My Profile
-//             </h3>
-//             <div className="flex flex-col md:flex-row items-start gap-6">
-//               <div className="flex-shrink-0">
-//                 <img 
-//                   src="2person.jpg" 
-//                   alt="profile" 
-//                   className="w-24 h-24 rounded-full object-cover border-2" 
-//                   style={{ borderColor: customColor }}
-//                 />
-//               </div>
-//               <div className="flex-grow">
-//                 {isEditing ? (
-//                   <div className="space-y-4">
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Full Name</label>
-//                       <input
-//                         type="text"
-//                         name="name"
-//                         value={profile.name}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Role</label>
-//                       <input
-//                         type="text"
-//                         name="role"
-//                         value={profile.role}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                   </div>
-//                 ) : (
-//                   <div>
-//                     <h4 className="text-xl font-bold">{profile.name}</h4>
-//                     <p className="text-gray-600">{profile.role}</p>
-//                     <p className="text-gray-600">{profile.location}</p>
-//                   </div>
-//                 )}
-//               </div>
-//             </div>
-//           </div>
-
-//           {/* Information Sections */}
-//           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-//             {/* Personal Information */}
-//             <div className="p-6 bg-gray-50 rounded-lg">
-//               <h3 className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1" 
-//                   style={{ color: customColor }}>
-//                 Personal Information
-//               </h3>
-//               <div className="space-y-4">
-//                 {isEditing ? (
-//                   <>
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Phone No.</label>
-//                       <input
-//                         type="phone"
-//                         name="phone"
-//                         value={profile.phone}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Email</label>
-//                       <input
-//                         type="email"
-//                         name="email"
-//                         value={profile.email}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                   </>
-//                 ) : (
-//                   <>
-//                     <div>
-//                       <p className="text-sm text-gray-500">First Name</p>
-//                       <p className="font-medium">{profile.firstName}</p>
-//                     </div>
-//                     <div>
-//                       <p className="text-sm text-gray-500">Email address</p>
-//                       <p className="font-medium">{profile.email}</p>
-//                     </div>
-//                   </>
-//                 )}
-//               </div>
-//             </div>
-
-//             {/* Address */}
-//             <div className="p-6 bg-gray-50 rounded-lg">
-//               <h3 className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1" 
-//                   style={{ color: customColor }}>
-//                 Address
-//               </h3>
-//               <div className="space-y-4">
-//                 {isEditing ? (
-//                   <>
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Country</label>
-//                       <input
-//                         type="text"
-//                         name="country"
-//                         value={profile.country}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                     <div>
-//                       <label className="block text-sm text-gray-500 mb-1">Postal Code</label>
-//                       <input
-//                         type="text"
-//                         name="postalCode"
-//                         value={profile.postalCode}
-//                         onChange={handleChange}
-//                         className="w-full p-2 border rounded"
-//                       />
-//                     </div>
-//                   </>
-//                 ) : (
-//                   <>
-//                     <div>
-//                       <p className="text-sm text-gray-500">Country</p>
-//                       <p className="font-medium">{profile.country}</p>
-//                     </div>
-//                     <div>
-//                       <p className="text-sm text-gray-500">Postal Code</p>
-//                       <p className="font-medium">{profile.postalCode}</p>
-//                     </div>
-//                   </>
-//                 )}
-//               </div>
-//             </div>
-//           </div>
-
-//           {/* Edit/Save Button */}
-//           <div className="mt-8 flex justify-end">
-//             <button
-//               onClick={toggleEdit}
-//               className="px-6 py-2 rounded-lg bg-[#AA405B] text-white font-semibold hover:opacity-90 transition"
-//             >
-//               {isEditing ? 'Save Changes' : 'Edit Profile'}
-//             </button>
-//           </div>
-//         </div>
-//       </div>
-//     </div>
-//   );
-// };
-
-// export default Profile;
-import React, { useState, useEffect } from "react";
-
-const Profile = () => {
+export default function Profile() {
   const customColor = "#AA405B";
+  const current = getCurrentUser();
+  const userId = current?.id || null;
 
-  const [profile, setProfile] = useState(null); // Initially null
+  const [profile, setProfile] = useState({
+    name: "",
+    position: "",
+    email: "",
+    address: "",
+    phone: "",
+    profileImage: "", // no default path; we'll use InitialAvatar if empty
+  });
+
   const [isEditing, setIsEditing] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [previewImage, setPreviewImage] = useState(null);
+  const [imgBust, setImgBust] = useState(0);
+  const [imgError, setImgError] = useState(false); // if true -> show InitialAvatar
 
-  // Get user ID from localStorage
-  const user = JSON.parse(localStorage.getItem("user") || "{}");
+  const [curPw, setCurPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [newPw2, setNewPw2] = useState("");
 
-  // Fetch user data from backend
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  // Build <img src> from DB value or preview
+  const imageSrc = useMemo(() => {
+    // If user picked a new file, show its preview
+    if (previewImage) return previewImage;
+
+    const v = profile.profileImage || "";
+    if (!v) return ""; // force InitialAvatar
+
+    // absolute URL: use as-is
+    if (/^https?:\/\//i.test(v)) return v;
+
+    // server-stored upload path (starts with /uploads/)
+    if (v.startsWith("/uploads/")) return `${API_BASE}${v}?t=${imgBust}`;
+
+    // plain filename in DB (e.g., "cat2.jpg") — assume server upload dir
+    if (!v.includes("/") && v.includes(".")) return `${API_BASE}/uploads/${v}?t=${imgBust}`;
+
+    // anything else: try as-is
+    return v;
+  }, [previewImage, profile.profileImage, imgBust]);
+
+  // ---- load profile from backend ----
   useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        if (!user?._id) return;
-
-        const res = await fetch(`http://localhost:5000/api/user/${user._id}`);
-        const data = await res.json();
-        if (data.success) setProfile(data.user);
-      } catch (err) {
-        console.error("Error fetching user:", err);
+    (async () => {
+      if (!userId) {
+        setErr("Please sign in again.");
+        return;
       }
-    };
-    fetchUser();
-  }, [user?._id]);
+      try {
+        setLoading(true);
+        setErr("");
+        setImgError(false);
+        const r = await fetch(
+          `${API_BASE}/api/profile?user_id=${encodeURIComponent(userId)}`,
+          { credentials: "include" }
+        );
+        const j = await r.json();
+        if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
 
-  // Handle input changes
+        setProfile({
+          name: j.name || "",
+          position: j.position || "",
+          email: j.email || "",
+          address: j.address || "",
+          phone: j.phone || "",
+          profileImage: j.profileImage || "", // empty -> InitialAvatar
+        });
+      } catch (e) {
+        setErr(e.message || "Failed to load profile.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [userId]);
+
+  // ---- form handlers ----
   const handleChange = (e) => {
     const { name, value } = e.target;
-    setProfile((prev) => ({
-      ...prev,
-      [name]: value,
-    }));
+    setProfile((p) => ({ ...p, [name]: value }));
   };
 
-  // Toggle edit mode
-  const toggleEdit = () => {
-    setIsEditing(!isEditing);
-    // TODO: Send updated data to backend here if needed
+  const handleFileSelect = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    if (f.size > 5 * 1024 * 1024) {
+      setErr("File size too large. Max 5MB.");
+      return;
+    }
+    setSelectedFile(f);
+    setErr("");
+    setImgError(false); // we'll try to show preview
+    const reader = new FileReader();
+    reader.onloadend = () => setPreviewImage(reader.result);
+    reader.readAsDataURL(f);
   };
 
-  if (!profile) return <p className="text-center mt-10">Loading profile...</p>;
+  // ---- upload image (creates/updates profileImage in DB) ----
+  const uploadProfileImage = async () => {
+    if (!selectedFile || !userId) return;
+    const fd = new FormData();
+    fd.append("profileImage", selectedFile);
+
+    try {
+      setLoading(true);
+      setErr("");
+      const r = await fetch(
+        `${API_BASE}/api/upload-profile-image?user_id=${encodeURIComponent(userId)}`,
+        {
+          method: "POST",
+          body: fd,
+          credentials: "include",
+        }
+      );
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+
+      const newPath = j.profileImage || j.imageUrl || "";
+      setProfile((p) => ({ ...p, profileImage: newPath }));
+      setImgBust(Date.now()); // refresh cache
+      setSelectedFile(null);
+      setPreviewImage(null);
+      setImgError(false);
+      alert("Profile image updated!");
+    } catch (e) {
+      setErr(e.message || "Upload failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---- save profile fields ----
+  const saveProfile = async () => {
+    if (!userId) return;
+    try {
+      setLoading(true);
+      setErr("");
+      const body = {
+        name: profile.name?.trim() || "",
+        position: profile.position?.trim() || "",
+        email: profile.email?.trim() || "",
+        address: profile.address?.trim() || "",
+        phone: profile.phone?.trim() || "",
+      };
+      const r = await fetch(`${API_BASE}/api/profile`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-User-Id": userId },
+        credentials: "include",
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+
+      setProfile((p) => ({
+        ...p,
+        name: j.user?.name ?? p.name,
+        position: j.user?.position ?? p.position,
+        email: j.user?.email ?? p.email,
+        address: j.user?.address ?? p.address,
+        phone: j.user?.phone ?? p.phone,
+        profileImage: j.user?.profileImage ?? p.profileImage,
+      }));
+      setIsEditing(false);
+      alert("Profile saved!");
+    } catch (e) {
+      setErr(e.message || "Update failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ---- change password (current + new + confirm) ----
+  const changePassword = async () => {
+    if (!userId) return;
+    if (!curPw || !newPw) {
+      setErr("Enter current and new password.");
+      return;
+    }
+    if (newPw !== newPw2) {
+      setErr("New passwords do not match.");
+      return;
+    }
+    try {
+      setLoading(true);
+      setErr("");
+      const r = await fetch(`${API_BASE}/api/profile/password`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", "X-User-Id": userId },
+        credentials: "include",
+        body: JSON.stringify({
+          current_password: curPw,
+          new_password: newPw,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || j.error) throw new Error(j.error || `HTTP ${r.status}`);
+      setCurPw("");
+      setNewPw("");
+      setNewPw2("");
+      alert("Password changed!");
+    } catch (e) {
+      setErr(e.message || "Password change failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const showImg = Boolean(imageSrc) && !imgError;
+
+  if (loading && !profile.name) {
+    return (
+      <div
+        className="max-w-4xl mx-auto mt-10 bg-white rounded-2xl shadow-lg p-8 border-2 flex justify-center items-center h-64"
+        style={{ borderColor: customColor }}
+      >
+        <div className="text-center">
+          <div
+            className="animate-spin rounded-full h-12 w-12 border-b-2 mx-auto"
+            style={{ borderColor: customColor }}
+          />
+          <p className="mt-4">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
       className="max-w-4xl mx-auto mt-10 bg-white rounded-2xl shadow-lg p-8 border-2"
       style={{ borderColor: customColor }}
     >
+      {err && (
+        <div className="bg-red-50 text-red-700 border border-red-200 rounded-md p-3 mb-4">
+          {err}
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-8">
         <div>
           <h2 className="text-2xl font-bold" style={{ color: customColor }}>
             Account Settings
           </h2>
-          <p className="text-sm text-gray-600">
-            Manage your profile and account settings
-          </p>
+          <p className="text-sm text-gray-600">Manage your profile and account settings</p>
         </div>
-        {/* <img
-          src={profile.profileImage ? `http://localhost:5000/uploads/${profile.profileImage}` : "https://randomuser.me/api/portraits/men/10.jpg"}
-          alt="profile icon"
-          className="w-16 h-16 rounded-full"
-        /> */}
-        <img
-                    src={profile.profileImage || "https://randomuser.me/api/portraits/men/10.jpg"}
-                    alt="profile"
-                    className="w-16 h-16 rounded-full"
-                    style={{ borderColor: customColor }}
-        />
+
+        {showImg ? (
+          <img
+            src={imageSrc}
+            alt="profile"
+            className="w-16 h-16 rounded-full object-cover border-2"
+            style={{ borderColor: customColor }}
+            onError={() => setImgError(true)}
+          />
+        ) : (
+          <InitialAvatar
+            name={profile.name || current?.name}
+            email={profile.email || current?.email}
+            size={64}
+            className="border-2"
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
         <div className="md:col-span-4">
-          {/* Profile Section */}
+          {/* Profile section */}
           <div className="mb-8 p-6 bg-gray-50 rounded-lg">
             <h3
               className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1"
@@ -289,56 +325,74 @@ const Profile = () => {
               My Profile
             </h3>
             <div className="flex flex-col md:flex-row items-start gap-6">
-              <div className="flex-shrink-0">
-                <img
-                    src={profile.profileImage || "https://randomuser.me/api/portraits/men/10.jpg"}
+              <div className="flex-shrink-0 relative">
+                {showImg ? (
+                  <img
+                    src={imageSrc}
                     alt="profile"
                     className="w-24 h-24 rounded-full object-cover border-2"
                     style={{ borderColor: customColor }}
-                />
+                    onError={() => setImgError(true)}
+                  />
+                ) : (
+                  <InitialAvatar
+                    name={profile.name || current?.name}
+                    email={profile.email || current?.email}
+                    size={96}
+                    className="border-2"
+                  />
+                )}
 
+                {isEditing && (
+                  <>
+                    <label
+                      htmlFor="profile-upload"
+                      className="absolute bottom-0 right-0 bg-[#AA405B] text-white p-1 rounded-full cursor-pointer"
+                      title="Choose new photo"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path
+                          fillRule="evenodd"
+                          d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    </label>
+                    <input id="profile-upload" type="file" accept="image/*" className="hidden" onChange={handleFileSelect} />
+                    {selectedFile && (
+                      <button onClick={uploadProfileImage} className="mt-2 px-4 py-1 bg-[#AA405B] text-white rounded text-sm">
+                        Upload Image
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
+
               <div className="flex-grow">
                 {isEditing ? (
                   <div className="space-y-4">
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Full Name
-                      </label>
-                      <input
-                        type="text"
-                        name="name"
-                        value={profile.name}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Full Name</label>
+                      <input type="text" name="name" value={profile.name} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
-                    {/* <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Role
-                      </label>
-                      <input
-                        type="text"
-                        name="role"
-                        value={profile.role}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
-                    </div> */}
+                    <div>
+                      <label className="block text-sm text-gray-500 mb-1">Position</label>
+                      <input type="text" name="position" value={profile.position} onChange={handleChange} className="w-full p-2 border rounded" />
+                    </div>
                   </div>
                 ) : (
                   <div>
-                    <h4 className="text-xl font-bold">{profile.name}</h4>
-                    {/* <p className="text-gray-600">{profile.role}</p> */}
-                    <p className="text-gray-600">{profile.position}</p>
+                    <h4 className="text-xl font-bold">{profile.name || "—"}</h4>
+                    <p className="text-gray-600">{profile.position || "—"}</p>
                   </div>
                 )}
               </div>
             </div>
           </div>
 
-          {/* Personal Information */}
+          {/* Info sections */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Personal */}
             <div className="p-6 bg-gray-50 rounded-lg">
               <h3
                 className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1"
@@ -350,16 +404,41 @@ const Profile = () => {
                 {isEditing ? (
                   <>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Email
-                      </label>
-                      <input
-                        type="email"
-                        name="email"
-                        value={profile.email}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Email</label>
+                      <input type="email" name="email" value={profile.email} onChange={handleChange} className="w-full p-2 border rounded" />
+                    </div>
+
+                    {/* Change Password */}
+                    <div className="mt-6 p-4 bg-white rounded-lg border">
+                      <h4 className="font-semibold mb-3" style={{ color: customColor }}>
+                        Change Password
+                      </h4>
+                      <div className="space-y-3">
+                        <input
+                          type="password"
+                          placeholder="Current password"
+                          value={curPw}
+                          onChange={(e) => setCurPw(e.target.value)}
+                          className="w-full p-2 border rounded"
+                        />
+                        <input
+                          type="password"
+                          placeholder="New password"
+                          value={newPw}
+                          onChange={(e) => setNewPw(e.target.value)}
+                          className="w-full p-2 border rounded"
+                        />
+                        <input
+                          type="password"
+                          placeholder="Confirm new password"
+                          value={newPw2}
+                          onChange={(e) => setNewPw2(e.target.value)}
+                          className="w-full p-2 border rounded"
+                        />
+                        <button onClick={changePassword} className="px-4 py-2 rounded bg-[#AA405B] text-white">
+                          Update Password
+                        </button>
+                      </div>
                     </div>
                     <div>
                       <label className="block text-sm text-gray-500 mb-1">
@@ -378,11 +457,11 @@ const Profile = () => {
                   <>
                     <div>
                       <p className="text-sm text-gray-500">Email</p>
-                      <p className="font-medium">{profile.email}</p>
+                      <p className="font-medium break-all">{profile.email || "—"}</p>
                     </div>
                     <div>
-                      <p className="text-sm text-gray-500">Phone</p>
-                      <p className="font-medium">{profile.phone}</p>
+                      <p className="text-sm text-gray-500">Password</p>
+                      <p className="font-medium">••••••••</p>
                     </div>
                   </>
                 )}
@@ -391,66 +470,34 @@ const Profile = () => {
 
             {/* Address */}
             <div className="p-6 bg-gray-50 rounded-lg">
-              {/* <h3
+              <h3
                 className="text-lg font-semibold mb-4 border-b-4 border-[#AA405B] inline-block pb-1"
                 style={{ color: customColor }}
               >
                 Address
-              </h3> */}
+              </h3>
               <div className="space-y-4">
                 {isEditing ? (
                   <>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Address
-                      </label>
-                      <input
-                        type="text"
-                        name="address"
-                        value={profile.address || ""}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Phone</label>
+                      <input type="text" name="phone" value={profile.phone} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                     <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Date of Birth
-                      </label>
-                      <input
-                        type="text"
-                        name="dob"
-                        value={profile.dob || ""}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm text-gray-500 mb-1">
-                        Role
-                      </label>
-                      <input
-                        type="text"
-                        name="dob"
-                        value={profile.role || ""}
-                        onChange={handleChange}
-                        className="w-full p-2 border rounded"
-                      />
+                      <label className="block text-sm text-gray-500 mb-1">Address</label>
+                      <input type="text" name="address" value={profile.address} onChange={handleChange} className="w-full p-2 border rounded" />
                     </div>
                   </>
                 ) : (
                   <>
                     <div>
-                    <p className="text-sm text-gray-500">Address</p>
-                    <p className="font-medium">{profile.address}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Date of Birth</p>
-                    <p className="font-medium">{profile.dob}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-gray-500">Role</p>
-                    <p className="font-medium">{profile.role}</p>
-                  </div>
+                      <p className="text-sm text-gray-500">Phone</p>
+                      <p className="font-medium">{profile.phone || "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">Address</p>
+                      <p className="font-medium break-words">{profile.address || "—"}</p>
+                    </div>
                   </>
                   
                   
@@ -459,20 +506,18 @@ const Profile = () => {
             </div>
           </div>
 
-          {/* Edit/Save Button */}
+          {/* Save / Edit */}
           <div className="mt-8 flex justify-end">
             <button
-              onClick={toggleEdit}
-              className="px-6 py-2 rounded-lg bg-[#AA405B] text-white font-semibold hover:opacity-90 transition"
+              onClick={() => (isEditing ? saveProfile() : setIsEditing(true))}
+              disabled={loading}
+              className="px-6 py-2 rounded-lg bg-[#AA405B] text-white font-semibold hover:opacity-90 transition disabled:opacity-50"
             >
-              {isEditing ? "Save Changes" : "Edit Profile"}
+              {loading ? "Processing..." : isEditing ? "Save Profile" : "Edit Profile"}
             </button>
           </div>
         </div>
       </div>
     </div>
   );
-};
-
-export default Profile;
-
+}
