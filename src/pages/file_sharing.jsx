@@ -2,15 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import io from "socket.io-client";
 import {
-  FaFolder,
-  FaFileAlt,
-  FaFileExcel,
-  FaFileCsv,
-  FaFileCode,
-  FaFileImage,
-  FaFilePdf,
-  FaCloud,
-  FaHdd,
+  FaFolder, FaFileAlt, FaFileExcel, FaFileCsv, FaFileCode, FaFileImage, FaFilePdf, FaCloud, FaHdd, FaSearch
 } from "react-icons/fa";
 
 const API_URL = "http://localhost:5000/api";
@@ -280,30 +272,57 @@ function FileManager() {
       file.filename.toLowerCase().includes(searchQuery.toLowerCase())
     );
 
+    const allFilteredFiles = folders
+    .flatMap(f =>
+      f.files.map(file => ({ ...file, folderName: f.name, folderId: f._id }))
+    )
+    .filter(file => file.filename.toLowerCase().includes(searchQuery.toLowerCase()));
+
   return (
-    <div className="min-h-screen bg-white px-8 py-10">
-      <h1 className="text-2xl font-bold mb-6">📂 File Manager</h1>
+    <div className="min-h-screen bg-white px-6 py-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        {/* Title */}
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <FaFolder className="text-yellow-500" />
+          File Manager
+        </h1>
 
-      <input
-        type="text"
-        placeholder="Search folders/files..."
-        value={searchQuery}
-        onChange={(e) => setSearchQuery(e.target.value)}
-        className="w-full mb-4 p-2 border rounded"
-      />
+        {/* Search + Add */}
+        <div className="flex items-center gap-3">
+          {/* Search Box */}
+          <div className="relative">
+            <FaSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-48 md:w-64 p-2 pl-9 border rounded focus:ring focus:ring-blue-200"
+            />
+          </div>
 
-      {/* Create Folder */}
-      <div className="flex gap-3 mb-6">
-        <button
-          onClick={() => setShowCreateFolderForm(!showCreateFolderForm)}
-          className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        >
-          Create Folder
-        </button>
+          {/* Add Button */}
+          <button
+            onClick={() => {
+              if (activeFolder) {
+                handleFileSelect(activeFolder); // upload files
+              } else {
+                setShowCreateFolderForm(true); // create folder
+              }
+            }}
+            className="p-2 text-white rounded-full hover:bg-blue-700 flex items-center justify-center"
+            style={{ backgroundColor: "#AA405B" }}
+            title={activeFolder ? "Upload File" : "Create Folder"}
+          >
+            +
+          </button>
+        </div>
       </div>
 
-      {showCreateFolderForm && (
-        <div className="mb-6 p-4 border rounded bg-gray-100 w-full max-w-md">
+      {/* Create Folder Form */}
+      {showCreateFolderForm && !activeFolder && (
+        <div className="mb-6 p-4 border rounded bg-gray-50 max-w-md">
           <input
             type="text"
             placeholder="Folder Name"
@@ -333,20 +352,22 @@ function FileManager() {
       )}
 
       {/* Folder List */}
-      <div className="flex flex-wrap gap-4 mb-6">
+      <div className="flex flex-wrap gap-3 mb-6">
         {filteredFolders.map((folder) => (
           <div
             key={folder._id}
-            className={`cursor-pointer px-4 py-2 rounded border flex items-center gap-2 ${
+            className={`flex items-center gap-2 px-4 py-2 rounded border cursor-pointer transition ${
               activeFolder === folder._id
                 ? "bg-blue-100 border-blue-600"
-                : "bg-gray-100 border-gray-300"
+                : "bg-gray-50 border-gray-200 hover:bg-gray-100"
             }`}
+            onClick={() => setActiveFolder(folder._id)}
           >
             <FaFolder className="text-blue-500" />
-            <span onClick={() => setActiveFolder(folder._id)}>{folder.name}</span>
+            <span>{folder.name}</span>
             <button
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation(); // prevent folder activation on delete
                 if (!window.confirm(`Delete folder "${folder.name}"?`)) return;
                 const userId = getUserId();
                 try {
@@ -355,12 +376,11 @@ function FileManager() {
                   });
                   setFolders((prev) => prev.filter((f) => f._id !== folder._id));
                   if (activeFolder === folder._id) setActiveFolder(null);
-                  alert("Folder deleted successfully");
                 } catch (err) {
                   alert(err.response?.data?.error || "Failed to delete folder");
                 }
               }}
-              className="ml-auto px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs"
+              className="ml-auto px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
             >
               Delete
             </button>
@@ -369,83 +389,102 @@ function FileManager() {
       </div>
 
       {/* Files */}
-      {activeFolder && (
-        <div>
-          <div
-            className="flex gap-3 items-center mb-4 border-2 border-dashed p-4 rounded"
-            onDrop={handleDrop}
-            onDragOver={handleDragOver}
-            ref={dropRef}
-          >
-            <span>Drag & drop file here</span>
-            <button
-              onClick={() => handleFileSelect(activeFolder)}
-              className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700"
+      {/* Files */}
+      {activeFolder ? (
+        // Files in the selected folder
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {filteredFiles?.map((file) => (
+            <div
+              key={file._id}
+              className="p-3 bg-white border rounded shadow flex flex-col gap-2"
             >
-              Upload File
-            </button>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {filteredFiles?.map((file) => (
+              <div className="flex items-center gap-2">
+                {getFileIcon(file.filename)}
+                {file.storage === "gridfs" ? (
+                  <FaCloud className="text-green-500" title="GridFS Storage" />
+                ) : (
+                  <FaHdd className="text-gray-500" title="Local Storage" />
+                )}
+              </div>
+              <span className="text-gray-700 text-sm truncate">{file.filename}</span>
+              <div className="flex gap-2 flex-wrap">
+                <button
+                  onClick={() => handleDownload(file._id, file.filename)}
+                  className="flex-1 px-2 py-1 bg-blue-600 text-white rounded text-xs hover:bg-blue-700"
+                >
+                  Download
+                </button>
+                <button
+                  onClick={() => handlePreview(file._id, file.filename)}
+                  className="flex-1 px-2 py-1 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
+                >
+                  Preview
+                </button>
+                <button
+                  onClick={() => handleDeleteFile(file._id, file.filename)}
+                  className="flex-1 px-2 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : searchQuery ? (
+        // Search files across all folders
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {allFilteredFiles.length > 0 ? (
+            allFilteredFiles.map((file) => (
               <div
                 key={file._id}
                 className="p-3 bg-white border rounded shadow flex flex-col gap-2"
               >
-                <div className="flex items-center gap-1 mb-1">
+                <div className="flex items-center gap-2">
                   {getFileIcon(file.filename)}
                   {file.storage === "gridfs" ? (
-                    <FaCloud title="GridFS Storage" className="text-green-500" />
+                    <FaCloud className="text-green-500" title="GridFS Storage" />
                   ) : (
-                    <FaHdd title="Local Storage" className="text-gray-500" />
+                    <FaHdd className="text-gray-500" title="Local Storage" />
                   )}
                 </div>
                 <span className="text-gray-700 text-sm truncate">{file.filename}</span>
-                <div className="flex gap-2">
+                <span className="text-gray-400 text-xs">Folder: {file.folderName}</span>
+                <div className="flex gap-2 flex-wrap">
                   <button
                     onClick={() => handleDownload(file._id, file.filename)}
-                    className="px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-xs"
+                    className="flex-1 px-2 py-1 text-white rounded text-xs"
+                    style={{ backgroundColor: "#607D8B" }}
                   >
                     Download
                   </button>
                   <button
                     onClick={() => handlePreview(file._id, file.filename)}
-                    className="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 text-xs"
+                    className="flex-1 px-2 py-1 text-white rounded text-xs"
+                    style={{ backgroundColor: "#A890B3" }}
                   >
                     Preview
                   </button>
                   <button
                     onClick={() => handleDeleteFile(file._id, file.filename)}
-                    className="px-2 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-xs"
+                    className="flex-1 px-2 py-1 text-white rounded text-xs"
+                    style={{ backgroundColor: "#A77D7D" }}
                   >
                     Delete
                   </button>
-                </div>
-              </div>
-            ))}
-          </div>
+                    </div>
+                  </div>
+            ))
+          ) : (
+            <div className="text-gray-500">No files found</div>
+          )}
         </div>
+      ) : (
+        <div className="text-gray-500">Select a folder to view files</div>
       )}
 
-      {/* Preview Modal */}
-      {previewFile && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex justify-center items-center z-50">
-          <div className="bg-white p-4 rounded w-3/4 h-3/4 overflow-auto">
-            <div className="flex justify-between items-center mb-2">
-              <h2 className="font-bold">{previewFile.name}</h2>
-              <button
-                className="px-2 py-1 bg-red-600 text-white rounded"
-                onClick={() => setPreviewFile(null)}
-              >
-                Close
-              </button>
-            </div>
-            <iframe src={previewFile.url} className="w-full h-full"></iframe>
-          </div>
-        </div>
-      )}
     </div>
   );
+
 }
 
 export default FileManager;
