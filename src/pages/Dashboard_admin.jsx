@@ -7,6 +7,16 @@ import { FiBell } from "react-icons/fi";
 import NotificationBell from "../components/NotificationBell";
 import Notifications from '../components/Notifications';
 NotificationBell
+// Turn "/uploads/..." or "cat2.jpg" into an absolute URL for <img>
+const buildImageUrl = (v) => {
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;           // already absolute
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`;
+  if (!v.startsWith("/") && v.match(/\.(png|jpe?g|gif|webp|avif)$/i)) {
+    return `${API_BASE}/uploads/${v}`;
+  }
+  return v;
+};
 
 const DONE = new Set(["done", "complete", "completed", "finished"]);
 const lowercase = (s) => (s || "").toLowerCase();
@@ -222,7 +232,13 @@ const [notifOpen, setNotifOpen] = useState(false);
         if (mounted) {
           if (ru.ok && Array.isArray(users)) {
             const map = {};
-            users.forEach(u => { map[(u?._id?.$oid || u?._id || "").toString()] = u; });
+         users.forEach(u => {
+           const key = (u?._id?.$oid || u?._id || "").toString();
+           // Backend returns { _id, email, name, picture } with picture preferring profileImage
+           // Normalize to absolute URL for the <img>
+           const img = buildImageUrl(u?.picture || "");
+           map[key] = { ...u, picture: img };
+         });
             setMembersById(map);
           } else {
             setMembersById({});
@@ -279,7 +295,10 @@ const [notifOpen, setNotifOpen] = useState(false);
           const users = await ru.json().catch(() => []);
           if (ru.ok && Array.isArray(users)) {
             const map = { ...membersById };
-            users.forEach(u => { map[(u?._id?.$oid || u?._id || "").toString()] = u; });
+     users.forEach(u => {
+       const key = (u?._id?.$oid || u?._id || "").toString();
+       map[key] = { ...u, picture: buildImageUrl(u?.picture || "") };
+     });
             if (mounted) setMembersById(map);
           }
         } catch {}

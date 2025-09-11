@@ -3,7 +3,7 @@ from flask_cors import CORS
 from backend.database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from flask_socketio import emit, join_room, leave_room
 import re
@@ -130,7 +130,9 @@ def options_task_detail(task_id):
 @app.route("/members", methods=["OPTIONS"])
 def options_members():
     return _preflight_ok()
-
+@app.route("/notifications/run_deadline_scan", methods=["OPTIONS"])
+def options_deadline_scan():
+    return _preflight_ok()
 # --- collections ---
 users_collection = db["users"]
 projects_collection = db["projects"]
@@ -301,7 +303,7 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     }
     for uid in admin_ids:
         try:
-            notifications_collection.insert_one({**base, "user_id": uid})
+            notifications_collection.insert_one({**base, "for_user": uid})
         except Exception:
             pass
 
@@ -332,7 +334,7 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
         except Exception:
             continue
         try:
-            notifications_collection.insert_one({**base, "user_id": uid_obj})
+            notifications_collection.insert_one({**base, "for_user": uid_obj})
         except Exception:
             pass
 
@@ -925,6 +927,96 @@ def recompute_and_store_project_progress(project_oid):
             )
     except Exception:
         pass
+def _as_dt(v):
+    """Coerce task end_at into datetime (UTC) best-effort."""
+    if isinstance(v, datetime):
+        return v
+    if not v:
+        return None
+    try:
+        # ISO string like "2025-09-15T00:00:00Z" or "2025-09-15"
+        return datetime.fromisoformat(str(v).replace("Z","").strip())
+    except Exception:
+        return None
+
+def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
+    """
+    Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
+    """
+    try:
+        q = {
+            "type": "task_deadline_soon",
+            "created_at": {"$gte": since_dt},
+            "data.task_id": str(task_id)
+        }
+        return notifications_collection.count_documents(q) > 0
+    except Exception:
+        return False
+
+# 1) update function signature and logic
+def scan_upcoming_deadlines(days: int = 7,
+                            lookback_hours: int = 12,
+                            only_for_user: ObjectId | None = None,
+                            include_leader: bool = False) -> dict:
+    now = datetime.utcnow()
+    soon = now + timedelta(days=max(1, int(days)))
+    recent = now - timedelta(hours=max(1, int(lookback_hours)))
+
+    open_status = {"$nin": ["completed", "complete", "done", "finished"]}
+    q = {"status": open_status, "end_at": {"$ne": None}}
+    if only_for_user:
+        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
+
+    cur = tasks_collection.find(q, {"title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
+
+    sent = checked = 0
+    for t in cur:
+        checked += 1
+        end_dt = _as_dt(t.get("end_at"))
+        if not end_dt or not (now <= end_dt <= soon):
+            continue
+        if _already_alerted_recently(t["_id"], recent):
+            continue
+
+        proj = projects_collection.find_one({"_id": t["project_id"]}, {"leader_id": 1, "name": 1})
+        pname = (proj or {}).get("name", "") or "Project"
+        leader_id = (proj or {}).get("leader_id")
+        aid = t.get("assignee_id")
+
+        # recipients: assignee; add leader only if explicitly allowed
+        recipients = []
+        if aid:
+            recipients.append(aid)
+        if include_leader and leader_id and leader_id != aid:
+            recipients.append(leader_id)
+
+        # if we restrict to just one user, enforce strictly
+        if only_for_user:
+            recipients = [r for r in recipients if str(r) == str(only_for_user)]
+
+        if not recipients:
+            continue
+
+        due_str = end_dt.strftime("%b %d, %Y")
+        try:
+            notify_users(
+                user_ids=recipients,
+                kind="task_deadline_soon",
+                title=f"Deadline in {days} day(s) • {pname}",
+                body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
+                data={
+                    "task_id": str(t["_id"]),
+                    "project_id": str(t["project_id"]),
+                    "project_name": pname,
+                    "end_at": end_dt.isoformat() + "Z",
+                    "window_days": int(days)
+                }
+            )
+            sent += len(recipients)
+        except Exception:
+            pass
+
+    return {"checked": checked, "sent": sent}
 
 # -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
@@ -1025,6 +1117,33 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
     for uid, roles in per_user.items():
         for r in roles:
             _append_experience(uid, r, project_name, when)
+
+# 2) extend the endpoint to accept those flags
+@app.post("/notifications/run_deadline_scan")
+def run_deadline_scan():
+    """
+    POST /notifications/run_deadline_scan
+    Body (all optional):
+      {
+        "days": 7,
+        "lookback_hours": 12,
+        "only_for_user": "<userId or null>",
+        "include_leader": false
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    days = int(data.get("days", 7) or 7)
+    lookback = int(data.get("lookback_hours", 12) or 12)
+    only_for_user = to_object_id(data.get("only_for_user")) if data.get("only_for_user") else None
+    include_leader = bool(data.get("include_leader", False))
+
+    out = scan_upcoming_deadlines(
+        days=days,
+        lookback_hours=lookback,
+        only_for_user=only_for_user,
+        include_leader=include_leader
+    )
+    return jsonify({"ok": True, **out}), 200
 
 @app.route("/projects", methods=["GET", "POST"])
 def projects():

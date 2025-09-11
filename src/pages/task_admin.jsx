@@ -317,27 +317,37 @@ const TaskAdmin = () => {
   const [mtError, setMtError] = useState("");
 
   // all members across projects
-  const allMemberIds = useMemo(() => {
+const currentMemberIds = useMemo(() => {
     const s = new Set();
-    projects.forEach(p => {
-      if (p.leader_id) s.add(p.leader_id);
-      (p.member_ids || []).forEach(id => s.add(id));
-    });
+    if (selectedProject) {
+      if (selectedProject.leader_id) s.add(String(selectedProject.leader_id));
+      (selectedProject.member_ids || []).forEach((id) => id && s.add(String(id)));
+    }
     return [...s];
-  }, [projects]);
+  }, [selectedProject]);
 
-  const memberOptions = useMemo(() => {
-    return allMemberIds
-      .map(id => membersById[id]
-        ? { _id: id, name: membersById[id].name, email: membersById[id].email, picture: membersById[id].picture }
-        : { _id: id }
-      )
-      .sort((a,b) => (a.name||a.email||"").localeCompare(b.name||b.email||""));
-  }, [allMemberIds, membersById]);
+const memberOptions = useMemo(() => {
+    return currentMemberIds
+      .map((id) => {
+        const m = membersById[id] || {};
+        return {
+          _id: id,
+          name: m.name || "",
+          email: m.email || "",
+          picture: m.picture || m._img || "",
+        };
+      })
+      .sort((a, b) => (a.name || a.email || "").localeCompare(b.name || b.email || ""));
+  }, [currentMemberIds, membersById]);
 
-  useEffect(() => {
-    if (!selectedMemberId && memberOptions.length) setSelectedMemberId(memberOptions[0]._id);
-  }, [memberOptions, selectedMemberId]);
+useEffect(() => {
+    if (!memberOptions.length) {
+      setSelectedMemberId("");
+      return;
+    }
+    const stillValid = memberOptions.some((m) => m._id === selectedMemberId);
+    if (!stillValid) setSelectedMemberId(memberOptions[0]._id);
+  }, [selectedProjectId, memberOptions, selectedMemberId]);
 
   useEffect(() => {
     if (!selectedMemberId) return;

@@ -542,11 +542,27 @@ const Task = () => {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center space-x-3">
            
+{/* Avatar */}
+  <div className="w-9 h-9 rounded-full overflow-hidden bg-gray-200 flex items-center justify-center ring-2 ring-gray-300">
+    {mePic && !imgError ? (
+      <img
+        src={mePic}
+        alt="me"
+        className="w-full h-full object-cover"
+        onError={() => setImgError(true)}
+     />
+    ) : (
+      <span className="text-sm font-bold text-gray-600">{meInitial}</span>
+    )}
+  </div>
 
-            <div>
-              <div className="font-semibold">{user?.name || user?.email || "User"}</div>
-              <div className="text-xs text-gray-500">{user?.email || ""}</div>
-            </div>
+  {/* Name + Email */}
+  <div>
+    <div className="font-semibold">{user?.name || user?.email || "User"}</div>
+    <div className="text-xs text-gray-500">{user?.email || ""}</div>
+  </div>
+
+            
           </div>
           <FaBell style={{ color: customColor }} />
         </div>
