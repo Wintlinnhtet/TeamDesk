@@ -3,7 +3,9 @@ from flask_cors import CORS
 from backend.database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
-from datetime import datetime, timedelta
+# at the top of app.py
+from datetime import datetime, timedelta, timezone
+
 import json
 from flask_socketio import emit, join_room, leave_room
 import re
@@ -44,7 +46,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "192.168.1.5"
+SERVER_IP = "172.20.1.227"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -53,6 +55,7 @@ FRONTEND_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5137",
+    f"http://{SERVER_IP}:5137",
     f"http://{SERVER_IP}:5137",
 ]
 
@@ -107,9 +110,39 @@ def _preflight_ok():
     for k, v in h.items():
         resp.headers[k] = v
     return resp
+
+# ❌ REMOVE this old handler:
+# @app.before_request
+# def handle_preflight():
+#     if request.method == "OPTIONS":
+#         return app.make_response(("", 204))
+
+# ✅ Keep a single catch for OPTIONS (you already have some; this one is a safety net)
+@app.route("/", defaults={"path": ""}, methods=["OPTIONS"])
+@app.route("/<path:path>", methods=["OPTIONS"])
+def catch_all_options(path):
+    return _preflight_ok()
+
 # where you create the app and register blueprints
 app.register_blueprint(bp_notifications, url_prefix="/notifications")
+def _iso_utc(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    # RFC3339-like with trailing Z
+    return dt.isoformat().replace("+00:00", "Z")
 
+def _jsonable(value):
+    if isinstance(value, datetime):
+        return _iso_utc(value)
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    return value
 # --- explicit preflights ---
 @app.route("/projects", methods=["OPTIONS"])
 def options_projects():
@@ -185,7 +218,8 @@ def api_profile():
     if not updates:
         return jsonify({"error": "No changes"}), 400
 
-    updates["updated_at"] = datetime.utcnow()
+    updates["updated_at"] = datetime.now(timezone.utc)
+
     users_collection.update_one({"_id": uid}, {"$set": updates})
     u2 = users_collection.find_one({"_id": uid})
     return jsonify({"ok": True, "user": _public_user_doc(u2)}), 200
@@ -222,7 +256,8 @@ def api_profile_password():
     except Exception:
         new_hash = generate_password_hash(new_password, method="pbkdf2:sha256", salt_length=16)
 
-    users_collection.update_one({"_id": uid}, {"$set": {"password": new_hash, "updated_at": datetime.utcnow()}})
+    users_collection.update_one({"_id": uid}, {"$set": {"password": new_hash, "updated_at": datetime.now(timezone.utc)
+}})
     return jsonify({"ok": True}), 200
 
 
@@ -261,7 +296,8 @@ def api_upload_profile_image():
     image_url = f"/uploads/{new_name}"
     users_collection.update_one(
         {"_id": uid},
-        {"$set": {"profileImage": image_url, "updated_at": datetime.utcnow()}}
+        {"$set": {"profileImage": image_url, "updated_at": datetime.now(timezone.utc)
+}}
     )
 
     return jsonify({"ok": True, "imageUrl": image_url, "profileImage": image_url}), 200
@@ -292,7 +328,8 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     # Fallback: insert a notification document for each adminish user.
     admin_roles = ["admin", "owner", "superadmin"]
     admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     base = {
         "type": kind,
         "title": title,
@@ -319,7 +356,8 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
     except Exception:
         pass
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     base = {
         "type": kind,
         "title": title,
@@ -380,7 +418,18 @@ def handle_preflight():
 
 @app.after_request
 def add_cors_headers(resp):
-    resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    origin = request.headers.get("Origin", "")
+    if origin in FRONTEND_ORIGINS:
+        # reflect only known origins
+        resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+        resp.headers.setdefault("Vary", "Origin")
+        resp.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    # keep these fallbacks
+    req_acrh = request.headers.get("Access-Control-Request-Headers", "")
+    if req_acrh:
+        resp.headers.setdefault("Access-Control-Allow-Headers", req_acrh)
+    else:
+        resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
     resp.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
     return resp
 
@@ -544,7 +593,8 @@ def _write_member_experience_for_confirmed_project(pid: ObjectId):
     except Exception:
         return  # best-effort
 
-    when = datetime.utcnow()
+    when = datetime.now(timezone.utc)
+
     for uid, roles in roles_by_user.items():
         # Only write if the user actually has at least one role
         if not roles:
@@ -865,7 +915,8 @@ def recompute_and_store_project_progress(project_oid):
         return  # nothing changed → nothing to notify
 
     # 3) Persist the new progress
-    projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.utcnow()}})
+    projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.now(timezone.utc)
+}})
 
     # 4) Actor (from headers/body) for exclusion in notifications
     try:
@@ -958,7 +1009,8 @@ def scan_upcoming_deadlines(days: int = 7,
                             lookback_hours: int = 12,
                             only_for_user: ObjectId | None = None,
                             include_leader: bool = False) -> dict:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     soon = now + timedelta(days=max(1, int(days)))
     recent = now - timedelta(hours=max(1, int(lookback_hours)))
 
@@ -1041,7 +1093,8 @@ def _safe_load_experience(exp_val):
     return []
 
 def _relative_month_label(dt: datetime) -> str:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     months = (now.year - dt.year) * 12 + (now.month - dt.month)
     if months <= 0:
         return "This Month"
@@ -1113,7 +1166,8 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
             role = "Member"
         per_user.setdefault(aid_oid, set()).add(role)
 
-    when = datetime.utcnow()
+    when = datetime.now(timezone.utc)
+
     for uid, roles in per_user.items():
         for r in roles:
             _append_experience(uid, r, project_name, when)
@@ -1217,7 +1271,8 @@ def projects():
         "member_ids": member_ids,
         "start_at": data.get("start_at"),
         "end_at": data.get("end_at"),
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc)
+,
         "progress": int(prog_num),
         "status": status,
         "confirm": int(_normalize_confirm_value(data.get("confirm", 0))),  # keep numeric 0/1 if provided
@@ -1377,7 +1432,8 @@ def project_detail(project_id):
         if not updates:
             return jsonify({"error": "No changes"}), 400
 
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
+
 
         try:
             res = projects_collection.update_one({"_id": pid}, {"$set": updates})
@@ -1685,7 +1741,8 @@ def tasks_collection_handler():
         "progress": int(tprog),
         "project_role": project_role,
         "created_by": created_by,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc)
+,
     }
     ins = tasks_collection.insert_one(doc)
 
@@ -1829,7 +1886,8 @@ def task_detail(task_id):
         if "status" in data:
             updates["status"] = (data.get("status") or "todo").strip().lower()
 
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
+
 
         result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
         try:
@@ -1902,8 +1960,11 @@ def task_detail(task_id):
 
         project_id = t["project_id"]
 
-        # socket: task updated
-        socketio.emit("task:updated", patch, namespace="/rt", to=str(project_id))
+       # after you’ve built `patch` / `updates` and know the project_id:
+        safe_patch = _jsonable(patch)  # or _jsonable({"_id": task_id, **updates})
+
+        socketio.emit("task:updated", safe_patch, namespace="/rt", to=str(project_id))
+
 
         # recompute & broadcast project progress
         recompute_and_store_project_progress(project_id)
@@ -2027,7 +2088,8 @@ def save_announcement():
             "message": message,
             "sendTo": send_to,
             "image": filename,
-            "createdAt": datetime.utcnow()
+            "createdAt": datetime.now(timezone.utc)
+
         }
 
         result = announcement_collection.insert_one(announcement)
