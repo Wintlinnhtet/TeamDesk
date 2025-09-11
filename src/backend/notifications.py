@@ -1,9 +1,8 @@
-# src/backend/notifications.py
 from datetime import datetime, timedelta, timezone
-from backend.notifier import notify_users
 from bson import ObjectId
 from flask import Blueprint, request, jsonify
 from backend.database import db
+from backend.notifier import notify_users
 
 bp_notifications = Blueprint("notifications", __name__)
 col = db["notifications"]
@@ -13,49 +12,124 @@ def _oid(x):
         return ObjectId(str(x))
     except Exception:
         return None
+
+# --- NEW: robust UTC parser (handles naive ISO, "Z", etc.) ---
+def _as_dt_utc(v):
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if not v:
+        return None
+    s = str(v).strip()
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
 @bp_notifications.post("/run_deadline_scan")
 def run_deadline_scan():
-    """Create deadline notifications for tasks due in next 24h or overdue (not done)."""
-    from backend.database import db
+    """
+    Create 'deadline' notifications for tasks due within the next `days` (default 1 day).
+    De-dupe once per task per day.
+    Optional query params:
+      - days: int (default 1)
+      - lookback_hours: int (default 24)  # kept for parity, not strictly needed here
+      - include_leader: 0/1 (default 0)
+      - only_for_user: user id (limit to a single user)
+    """
     tasks = db["tasks"]
-    users = db["users"]
     notis = db["notifications"]
+    projects = db["projects"]
+
+    # --- read options ---
+    try:
+        days = int(request.args.get("days", "1") or 1)
+    except Exception:
+        days = 1
+    try:
+        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
+    except Exception:
+        lookback_hours = 24
+    include_leader = (str(request.args.get("include_leader", "0")).strip().lower() in {"1","true","yes","y"})
+    only_for_user = _oid(request.args.get("only_for_user"))
 
     now = datetime.now(timezone.utc)
-    soon = now + timedelta(hours=24)
+    soon = now + timedelta(days=max(1, days))
+    today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    # kept for future use if you want to skip duplicates in a rolling window
+    recent = now - timedelta(hours=max(1, lookback_hours))
 
-    # find tasks not completed and with end_at <= soon
+    # --- find candidate tasks (not done, with end_at) ---
     q = {
-        "status": {"$nin": ["done", "complete", "completed"]},
-        "end_at": {"$lte": soon}
+        "status": {"$nin": ["done", "complete", "completed", "finished"]},
+        "end_at": {"$ne": None}
     }
-    cur = tasks.find(q, {"_id": 1, "title": 1, "end_at": 1, "assignee_id": 1})
-    created = 0
+    if only_for_user:
+        # tolerate ObjectId / string in your collection
+        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
 
+    cur = tasks.find(q, {"_id": 1, "title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
+
+    checked = 0
+    sent = 0
     for t in cur:
-        assignee = t.get("assignee_id")
-        if not assignee:
+        checked += 1
+        end_dt = _as_dt_utc(t.get("end_at"))
+        if not end_dt:
             continue
-        # de-dupe: skip if we already notified for this task today
-        already = notis.find_one({
-            "for_user": assignee,
+        if end_dt > soon:
+            continue
+
+        task_id_str = str(t["_id"])
+
+        # --- daily de-dupe: ensure we didn't already create a deadline noti for this task today ---
+        if notis.find_one({
             "type": "deadline",
-            "data.task_id": t["_id"],
-            "created_at": {"$gte": now.replace(hour=0, minute=0, second=0, microsecond=0)}
-        })
-        if already:
+            "created_at": {"$gte": today0},
+            "data.task_id": task_id_str   # ✅ compare string with string
+        }):
             continue
-        # build message
-        due = t.get("end_at")
-        due_txt = due.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if isinstance(due, datetime) else ""
-        msg = f"Task deadline approaching: {t.get('title','(untitled)')} (due {due_txt})"
-        data = {"task_id": str(t["_id"]), "due_at": due_txt}
 
-        # insert+emit (one row for the assignee)
-        notify_users([assignee], "deadline", "Deadline", msg, data)  # emits notify:new
-        created += 1
+        # --- recipients: assignee (and optionally project leader) ---
+        recipients = []
+        aid = t.get("assignee_id")
+        if aid:
+            recipients.append(aid)
 
-    return jsonify({"created": created}), 200
+        if include_leader and t.get("project_id"):
+            proj = projects.find_one({"_id": t["project_id"]}, {"leader_id": 1})
+            lid = (proj or {}).get("leader_id")
+            if lid and str(lid) != str(aid):  # avoid sending twice to same person
+                recipients.append(lid)
+
+        if only_for_user:
+            recipients = [r for r in recipients if str(r) == str(only_for_user)]
+        if not recipients:
+            continue
+
+        due_txt = end_dt.isoformat().replace("+00:00", "Z")
+        title = "Deadline approaching"
+        body = f"‘{t.get('title', 'Task')}’ is due by {due_txt}."
+        data = {
+            "task_id": task_id_str,
+            "project_id": (str(t["project_id"]) if t.get("project_id") else None),
+            "end_at": due_txt,
+            "window_days": int(days)
+        }
+
+        try:
+            # notifier.notify_users writes 'message' in DB and emits realtime
+            notify_users(recipients, "deadline", title, body, data)
+            sent += len(recipients)
+        except Exception:
+            # best-effort; keep scanning
+            pass
+
+    return jsonify({"checked": checked, "sent": sent}), 200
+
+
 # NEW: derive uid from query, headers, or cookie (so panel works even if it forgets the param)
 def _uid_from_request():
     candidate = (

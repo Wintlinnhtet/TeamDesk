@@ -124,6 +124,7 @@ def _preflight_ok():
         resp.headers[k] = v
     return resp
 
+
 # ❌ REMOVE this old handler:
 # @app.before_request
 # def handle_preflight():
@@ -176,9 +177,7 @@ def options_task_detail(task_id):
 @app.route("/members", methods=["OPTIONS"])
 def options_members():
     return _preflight_ok()
-@app.route("/notifications/run_deadline_scan", methods=["OPTIONS"])
-def options_deadline_scan():
-    return _preflight_ok()
+
 # --- collections ---
 users_collection = db["users"]
 projects_collection = db["projects"]
@@ -366,25 +365,20 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
                 namespace="/rt", to=f"user:{str(uid)}")
         except Exception:
             pass
-        
-# replace your _notify_users with this
+
+# replace _notify_users in app.py
 def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_users; if not available, write records for each user.
-    """
     try:
-        # this is the function you actually imported at the top
         notify_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
     now = datetime.now(timezone.utc)
-
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ use 'message' in DB
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -398,6 +392,7 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
             notifications_collection.insert_one({**base, "for_user": uid_obj})
         except Exception:
             pass
+
 
 def to_object_id(id_str):
     try:
@@ -1020,7 +1015,7 @@ def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
     """
     try:
         q = {
-            "type": "task_deadline_soon",
+            "type": "deadline",
             "created_at": {"$gte": since_dt},
             "data.task_id": str(task_id)
         }
@@ -1081,12 +1076,13 @@ def scan_upcoming_deadlines(days: int = 7,
                 title=f"Deadline in {days} day(s) • {pname}",
                 body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
                 data={
-                    "task_id": str(t["_id"]),
-                    "project_id": str(t["project_id"]),
-                    "project_name": pname,
-                    "end_at": end_dt.isoformat() + "Z",
-                    "window_days": int(days)
-                }
+    "task_id": str(t["_id"]),
+    "project_id": str(t["project_id"]),
+    "project_name": pname,
+    "end_at": end_dt.isoformat().replace("+00:00","Z"),
+    "window_days": int(days)
+}
+
             )
             sent += len(recipients)
         except Exception:
@@ -1196,32 +1192,6 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
         for r in roles:
             _append_experience(uid, r, project_name, when)
 
-# 2) extend the endpoint to accept those flags
-@app.post("/notifications/run_deadline_scan")
-def run_deadline_scan():
-    """
-    POST /notifications/run_deadline_scan
-    Body (all optional):
-      {
-        "days": 7,
-        "lookback_hours": 12,
-        "only_for_user": "<userId or null>",
-        "include_leader": false
-      }
-    """
-    data = request.get_json(silent=True) or {}
-    days = int(data.get("days", 7) or 7)
-    lookback = int(data.get("lookback_hours", 12) or 12)
-    only_for_user = to_object_id(data.get("only_for_user")) if data.get("only_for_user") else None
-    include_leader = bool(data.get("include_leader", False))
-
-    out = scan_upcoming_deadlines(
-        days=days,
-        lookback_hours=lookback,
-        only_for_user=only_for_user,
-        include_leader=include_leader
-    )
-    return jsonify({"ok": True, **out}), 200
 
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
