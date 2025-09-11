@@ -101,6 +101,19 @@ CORS(
 )
 
 
+# in app.py (near other helpers)
+def _emit_experience_updated(user_id):
+    """Push realtime 'experience updated' event to a single user room."""
+    try:
+        uid_str = str(user_id)
+    except Exception:
+        return
+    socketio.emit(
+        "user:experience_updated",
+        {"user_id": uid_str},
+        namespace="/rt",
+        to=f"user:{uid_str}",
+    )
 
 # run once at boot and then every 10 minutes
 def _deadline_scan_job():
@@ -737,21 +750,18 @@ def _safe_serialize_experience(original_value, exp_list):
             return json.dumps([])
     return exp_list
 # put this in app.py, replacing your previous _write_member_experience_for_confirmed_project
-def _write_member_experience_for_confirmed_project(pid: ObjectId):
+def _write_member_experience_for_confirmed_project(pid: ObjectId) -> set[ObjectId]:
     """
     On project confirm, write experience ONLY for users who had a task project_role.
-    - Do not add an entry that is just "Leader".
-    - If a user is the leader AND had a role, append " (Leader)" to that role.
-    - Skip users without any project_role on tasks.
+    Returns the set of user ObjectIds that were updated.
     """
     proj = projects_collection.find_one({"_id": pid}, {"name": 1, "leader_id": 1})
     if not proj:
-        return
+        return set()
 
     proj_name = (proj.get("name") or "Untitled Project").strip()
     leader_id = proj.get("leader_id")
 
-    # Collect roles per user from tasks (non-empty project_role only)
     roles_by_user: dict[ObjectId, set[str]] = {}
     try:
         cur = tasks_collection.find(
@@ -769,46 +779,50 @@ def _write_member_experience_for_confirmed_project(pid: ObjectId):
                 continue
             roles_by_user.setdefault(aid, set()).add(role)
     except Exception:
-        return  # best-effort
+        return set()
 
     when = datetime.now(timezone.utc)
+    touched: set[ObjectId] = set()
 
     for uid, roles in roles_by_user.items():
-        # Only write if the user actually has at least one role
         if not roles:
             continue
         try:
             u = users_collection.find_one({"_id": uid}, {"experience": 1})
-            current = _safe_load_experience(u.get("experience") if u else None)
+            # your codebase accepts string or list; keep original type
+            original = u.get("experience") if u else None
+            current = _safe_parse_experience(original)
 
             is_leader = (leader_id == uid) if leader_id else False
+            changed = False
             for role in sorted(roles):
                 title = f"{role} (Leader)" if is_leader else role
-
-                # dedupe on (project, title)
                 exists = any(
                     isinstance(item, dict)
-                    and item.get("project", "").strip().lower() == proj_name.lower()
-                    and item.get("title", "").strip().lower() == title.lower()
+                    and str(item.get("project","")).strip().lower() == proj_name.lower()
+                    and str(item.get("title","")).strip().lower() == title.lower()
                     for item in current
                 )
                 if exists:
                     continue
-
                 current.append({
                     "title": title,
                     "project": proj_name,
                     "time": _relative_month_label(when)
                 })
+                changed = True
 
-            # store as JSON string (matches your existing schema)
-            users_collection.update_one(
-                {"_id": uid},
-                {"$set": {"experience": json.dumps(current, ensure_ascii=False)}}
-            )
+            if changed:
+                to_store = _safe_serialize_experience(original, current)
+                users_collection.update_one(
+                    {"_id": uid},
+                    {"$set": {"experience": to_store, "updated_at": when}}
+                )
+                touched.add(uid)
         except Exception:
-            # keep going for other users
             continue
+
+    return touched
 
 @app.post("/add-member")
 def add_member():
@@ -1584,6 +1598,50 @@ def project_detail(project_id):
                         )
                 except Exception:
                     pass
+                    # 2) figure out who actually got experience from tasks (same rule as writer)
+                roles_by_user = {}
+                cur = tasks_collection.find(
+                    {"$or": [{"project_id": pid}, {"project_id": str(pid)}]},
+                    {"assignee_id": 1, "project_role": 1},
+                )
+                for t in cur:
+                    role = (t.get("project_role") or "").strip()
+                    if not role:
+                        continue
+                    aid = t.get("assignee_id")
+                    try:
+                        aid = aid if isinstance(aid, ObjectId) else ObjectId(str(aid))
+                    except Exception:
+                        continue
+                    roles_by_user.setdefault(aid, True)
+
+                # 3) push realtime to each affected user
+                for uid in roles_by_user.keys():
+                    _emit_experience_updated(uid)
+                # also push a minimal project update so dashboards can re-render without refresh
+                try:
+                    # load recipients = members + leader (string ids OK)
+                    recips = set()
+                    meta = projects_collection.find_one({"_id": pid}, {"member_ids": 1, "leader_id": 1})
+                    for mid in (meta or {}).get("member_ids", []):
+                        try:
+                            recips.add(str(mid if isinstance(mid, ObjectId) else ObjectId(str(mid))))
+                        except Exception:
+                            pass
+                    lid = (meta or {}).get("leader_id")
+                    if lid:
+                        try:
+                            recips.add(str(lid if isinstance(lid, ObjectId) else ObjectId(str(lid))))
+                        except Exception:
+                            pass
+
+                    payload = {"_id": str(pid), "confirm": 1}
+                    for uid in recips:
+                        socketio.emit("project:updated", payload, namespace="/rt", to=f"user:{uid}")
+                except Exception:
+                    pass
+
+
         except Exception:
             pass
 

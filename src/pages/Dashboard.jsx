@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 import { getCurrentUser } from "../auth";
-
+import useRealtime from "../hooks/useRealtime";
 import NotificationBell from "../components/NotificationBell";
 import Notifications from "../components/Notifications";
 
@@ -34,6 +34,36 @@ const Dashboard = () => {
   const [projects, setProjects] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [msg, setMsg] = useState("");
+const reloadExperience = async () => {
+  if (!user?._id) return;
+  try {
+    const uRes = await fetch(`${API_BASE}/get-user/${user._id}`);
+    const uData = await uRes.json();
+    if (uRes.ok) setExperience(uData.experience ?? []);
+  } catch {}
+};
+
+useRealtime(null, {
+  onExperienceUpdated: (payload) => {
+    // ensure this event is for the logged-in user
+    if (payload?.user_id && payload.user_id !== user?._id) return;
+    // stay canonical: refetch the user's experience
+    reloadExperience();
+  },
+  onProjectUpdated: (p) => {
+    if (!p?._id) return;
+    // merge into local projects so confirmedExperience recomputes
+    setProjects((prev) =>
+      Array.isArray(prev)
+        ? prev.map((x) => (x._id === p._id ? { ...x, ...p } : x))
+        : prev
+    );
+  },
+});
+
+
+// Dashboard.jsx (or Profile/Experience page)
+
 
   const markAllRead = async () => {
     if (!user?._id) return;

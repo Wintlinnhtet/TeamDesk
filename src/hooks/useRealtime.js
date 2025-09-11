@@ -46,7 +46,14 @@ if (handlers.onProjectProgress) {
     if (handlers.onAdminProjectProgress) {
       socket.on("admin:project_progress", handlers.onAdminProjectProgress);
     }
+// after other listeners…
+if (handlers.onExperienceUpdated) {
+  socket.on("user:experience_updated", handlers.onExperienceUpdated);
+}
 
+if (handlers.onProjectUpdated) {
+  socket.on("project:updated", handlers.onProjectUpdated);
+}
 if (handlers.onNotify) socket.on("notify:new", handlers.onNotify);
 if (handlers.onNotifyCount) socket.on("notifications:unread_count", handlers.onNotifyCount);
     
@@ -63,6 +70,9 @@ if (handlers.onNotifyCount) socket.on("notifications:unread_count", handlers.onN
       socket.off("admin:project_progress");
       socket.off("notify:new");
       socket.off("notifications:unread_count");
+      socket.off("project:updated");
+      socket.off("user:experience_updated");
+
       socket.disconnect();
     };
   }, [projectId]);
