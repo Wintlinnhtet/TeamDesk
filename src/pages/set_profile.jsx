@@ -31,6 +31,8 @@ function InitialAvatar({ name, email, size = 64, className = "" }) {
     color: `hsl(${hue} 50% 30%)`,
   };
 
+  // if (!profile) return <p className="text-center mt-10">Loading profile...</p>;
+
   return (
     <div
       className={`flex items-center justify-center rounded-full font-semibold select-none ${className}`}
@@ -438,6 +440,18 @@ export default function Profile() {
                         </button>
                       </div>
                     </div>
+                    <div>
+                      <label className="block text-sm text-gray-500 mb-1">
+                        Phone
+                      </label>
+                      <input
+                        type="text"
+                        name="phone"
+                        value={profile.phone || ""}
+                        onChange={handleChange}
+                        className="w-full p-2 border rounded"
+                      />
+                    </div>
                   </>
                 ) : (
                   <>
@@ -485,6 +499,8 @@ export default function Profile() {
                       <p className="font-medium break-words">{profile.address || "—"}</p>
                     </div>
                   </>
+                  
+                  
                 )}
               </div>
             </div>

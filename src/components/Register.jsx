@@ -249,7 +249,7 @@ const Register = () => {
     password: "",
     confirmPassword: ""
   });
-  const [profileImage, setProfileImage] = useState(null); // ✅ profile image state
+  // const [profileImage, setProfileImage] = useState(null); // ✅ profile image state
   const [message, setMessage] = useState("");
 
   // Fetch existing user data to prefill form
@@ -287,9 +287,9 @@ const Register = () => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
-  const handleImageChange = (e) => {
-    setProfileImage(e.target.files[0]);
-  };
+  // const handleImageChange = (e) => {
+  //   setProfileImage(e.target.files[0]);
+  // };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -307,9 +307,9 @@ const Register = () => {
       formPayload.append("address", formData.address);
       formPayload.append("password", formData.password);
 
-      if (profileImage) {
-        formPayload.append("profileImage", profileImage);
-      }
+      // if (profileImage) {
+      //   formPayload.append("profileImage", profileImage);
+      // }
 
       const res = await fetch(`http://localhost:5000/update-user/${userId}`, {
         method: "PATCH",
@@ -394,7 +394,7 @@ const Register = () => {
             </div>
 
             {/* Profile Image */}
-            <div className="py-4">
+            {/* <div className="py-4">
               <span className="mb-2 text-md">Profile Image (Optional)</span>
               <input
                 type="file"
@@ -402,7 +402,7 @@ const Register = () => {
                 onChange={handleImageChange}
                 className="w-full p-2 border border-gray-300 focus:outline-none focus:ring-2 focus:ring-[#AA405B] rounded-md"
               />
-            </div>
+            </div> */}
 
             {/* Password */}
             <div className="py-4">

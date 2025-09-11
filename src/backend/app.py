@@ -859,13 +859,13 @@ def update_user(user_id):
     hashed_password = generate_password_hash(password)
 
     # Handle profile image (optional)
-    profile_image_filename = None
-    if "profileImage" in request.files:
-        file = request.files["profileImage"]
-        if file.filename != "" and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
-            profile_image_filename = filename  # Save only filename in DB
+    # profile_image_filename = None
+    # if "profileImage" in request.files:
+    #     file = request.files["profileImage"]
+    #     if file.filename != "" and allowed_file(file.filename):
+    #         filename = secure_filename(file.filename)
+    #         file.save(os.path.join(app.config["UPLOAD_FOLDER"], filename))
+    #         profile_image_filename = filename  # Save only filename in DB
 
     update_data = {
         "name": name,
@@ -876,8 +876,8 @@ def update_user(user_id):
         "alreadyRegister": True
     }
 
-    if profile_image_filename:
-        update_data["profileImage"] = profile_image_filename  # Store filename in DB
+    # if profile_image_filename:
+    #     update_data["profileImage"] = profile_image_filename  # Store filename in DB
 
     try:
         result = users_collection.update_one(
@@ -1370,6 +1370,20 @@ def projects():
         ins = projects_collection.insert_one(doc)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    
+    # mark the leader as isLeader: true
+    try:
+        if leader_id:
+        # Ensure leader_id is ObjectId
+            oid = leader_id if isinstance(leader_id, ObjectId) else ObjectId(leader_id)
+            res = users_collection.update_one(
+            {"_id": oid},
+            {"$set": {"isLeader": True}}
+        )
+        if res.matched_count == 0:
+            print(f"No user found with _id={oid}")
+    except Exception as e:
+        print("Failed to update user isLeader:", e)
 
     # notify assigned leader (if any)
     try:
@@ -2219,6 +2233,8 @@ def save_announcement():
             "message": message,
             "sendTo": send_to,
             "image": filename,
+            # "createdAt": datetime.utcnow(),
+            "readBy": [],
             "createdAt": datetime.now(timezone.utc)
 
         }
@@ -2327,6 +2343,8 @@ def update_announcement(id):
 
 
     # -------------------- GET ALL REGISTERED MEMBERS --------------------
+
+
 @app.get("/registered-members")
 def get_members():
     try:
@@ -2345,6 +2363,101 @@ def delete_user(user_id):
         if result.deleted_count == 0:
             return jsonify({"error": "User not found"}), 404
         return jsonify({"message": "User deleted successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+
+@app.route("/api/user/<user_id>", methods=["GET"])
+def get_user_profile(user_id):
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        # 🔥 Build response from your actual schema
+        user_data = {
+            "id": str(user["_id"]),
+            "name": user.get("name", ""),
+            "email": user.get("email", ""),
+            "phone": user.get("phone", ""),
+            "dob": user.get("dob", ""),
+            "role": user.get("role", ""),
+            "position": user.get("position", ""),
+            "experience": user.get("experience", ""),  # might be JSON string
+            "address": user.get("address", ""),
+            "alreadyRegister": user.get("alreadyRegister", False),
+            "profileImage": f"http://localhost:5000/uploads/{user['profileImage']}"
+                            if user.get("profileImage") else None,
+        }
+
+        return jsonify({"success": True, "user": user_data})
+
+    except Exception as e:
+        print("Error in get_user_profile:", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+   # Mark all as read for a user
+@app.route("/api/announcement/read-all/<user_id>", methods=["PUT"])
+def mark_all_as_read(user_id):
+    try:
+        result = announcement_collection.update_many(
+            {"readBy": {"$ne": user_id}},   # not read by this user
+            {"$addToSet": {"readBy": user_id}}
+        )
+        return jsonify({"success": True, "modified": result.modified_count})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+
+     
+# @app.route("/api/announcement/unread/<user_id>", methods=["GET"])
+# def unread_count(user_id):
+#     try:
+#         # Fetch the user first
+#         user = users_collection.find_one({"_id": ObjectId(user_id)})
+#         if not user:
+#             return jsonify({"error": "User not found"}), 404
+
+#         # Determine which announcements to count
+#         if user.get("isLeader", False):
+#             send_to_filter = "team_leader"
+#         else:
+#             send_to_filter = "all"
+
+#         count = announcement_collection.count_documents({
+#             "readBy": {"$ne": user_id},
+#             "sendTo": send_to_filter
+#         })
+#         return jsonify({"count": count})
+#     except Exception as e:
+#         return jsonify({"error": str(e)}), 500
+
+@app.route("/api/announcement/unread/<user_id>", methods=["GET"])
+def unread_count(user_id):
+    try:
+        user = users_collection.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        role = user.get("role", "member").lower()
+        is_leader = user.get("isLeader", False)
+
+        # Determine which announcements to count
+        if role == "admin":
+            send_to_filter = None  # admins see all
+        elif is_leader:
+            send_to_filter = ["all", "team_leader"]  # leader sees team_leader + all
+        else:
+            send_to_filter = ["all"]  # regular member sees only all
+
+        query = {"readBy": {"$ne": user_id}}
+        if send_to_filter is not None:
+            query["sendTo"] = {"$in": send_to_filter}
+
+        count = announcement_collection.count_documents(query)
+        return jsonify({"count": count})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

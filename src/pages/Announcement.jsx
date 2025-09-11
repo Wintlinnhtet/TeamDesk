@@ -99,10 +99,14 @@ const Announcement = () => {
   // ✅ get user from localStorage
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const role = (user && user.role) || "member";
+  const isLeader = user.isLeader || true;
+  
 
   const [searchTerm, setSearchTerm] = useState("");
 
   const navigate = useNavigate();
+
+  
 
   // ✅ fetch announcements
   useEffect(() => {
@@ -121,21 +125,40 @@ const Announcement = () => {
   }, []);
 
   // ✅ filter announcements based on role
+  // let filteredAnnouncements = [];
+  // if (role === "admin") {
+  //   filteredAnnouncements = announcements;
+  // } else if (role === "leader") {
+  //   filteredAnnouncements = announcements.filter(
+  //     (a) => a.sendTo === "all" || a.sendTo === "team_leader"
+  //   );
+  // } else if (role === "member") {
+  //   filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
+  // }
+
+
+
   let filteredAnnouncements = [];
-  if (role === "admin") {
-    filteredAnnouncements = announcements;
-  } else if (role === "leader") {
-    filteredAnnouncements = announcements.filter(
-      (a) => a.sendTo === "all" || a.sendTo === "team_leader"
-    );
-  } else if (role === "member") {
-    filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
-  }
+
+if (role === "admin") {
+  // Admin sees everything
+  filteredAnnouncements = announcements;
+} else if (isLeader) {
+  // Leaders see announcements sent to 'all' or 'team_leader'
+  filteredAnnouncements = announcements.filter(
+    (a) => a.sendTo === "all" || a.sendTo === "team_leader"
+  );
+} else if (role === "member") {
+  // Normal members see only 'all'
+  filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
+}
+
+
 
   // ✅ New: filter announcements by search term
   const displayedAnnouncements = filteredAnnouncements.filter((a) =>
-    a.title.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  a.title.toLowerCase().includes(searchTerm.toLowerCase())
+);
 
   return (
     <PageContainer>
