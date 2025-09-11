@@ -5,40 +5,36 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 # at the top of app.py
 from datetime import datetime, timedelta, timezone
-
+from apscheduler.schedulers.background import BackgroundScheduler
 import json
 from flask_socketio import emit, join_room, leave_room
 import re
 from werkzeug.utils import secure_filename
 import os, time
 from backend.extensions import socketio
-
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime, timedelta ,timezone
+from fastapi import FastAPI
+from dateutil.parser import isoparse
 # near other imports
-
 from bson import ObjectId
 # --- add at the very top of app.py ---
 import os, sys
 BASE_DIR = os.path.dirname(os.path.abspath(__file__)) 
-
 PARENT_DIR = os.path.dirname(BASE_DIR) 
-
-     
 # --- uploads config (ONE place only) ---
-
-
-
 if PARENT_DIR not in sys.path:
-
-    sys.path.insert(0, PARENT_DIR)
-
-
+ sys.path.insert(0, PARENT_DIR)
 from backend.notifications import bp_notifications
 from backend.notifier import notify_admins, notify_users
-
 from backend.database import get_db
-
-
 from backend.file_sharing import file_sharing_bp
+proj_col=get_db()["projects"]
+noti_col=get_db()["notifications"]
+users_col=get_db()["users"]
 
 
 app = Flask(__name__)
@@ -46,7 +42,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "172.20.1.227"
+SERVER_IP = "192.168.1.7"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -56,7 +52,7 @@ FRONTEND_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5137",
     f"http://{SERVER_IP}:5137",
-    f"http://{SERVER_IP}:5137",
+    
 ]
 
 socketio.init_app(
@@ -79,6 +75,19 @@ def on_leave(data):
     pid = data.get("projectId")
     if pid:
         leave_room(pid)
+# --- user rooms (one room per user) ---
+@socketio.on("user:join", namespace="/rt")
+def on_user_join(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        join_room(f"user:{uid}")
+
+@socketio.on("user:leave", namespace="/rt")
+def on_user_leave(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        leave_room(f"user:{uid}")
+
 # after FRONTEND_ORIGINS
 ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name", "X-User-Id"]
 
@@ -93,6 +102,16 @@ CORS(
 
 
 
+# run once at boot and then every 10 minutes
+def _deadline_scan_job():
+    try:
+        # import inside the job to avoid circular imports on app startup
+        from backend.notifications import scan_and_send_deadlines
+        res = scan_and_send_deadlines(days=7, lookback_hours=24, include_leader=False)
+        # (optional) you can log res if you have logging configured
+        # print("deadline scan:", res)
+    except Exception:
+        pass
 
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
@@ -111,6 +130,7 @@ def _preflight_ok():
         resp.headers[k] = v
     return resp
 
+
 # ❌ REMOVE this old handler:
 # @app.before_request
 # def handle_preflight():
@@ -125,6 +145,11 @@ def catch_all_options(path):
 
 # where you create the app and register blueprints
 app.register_blueprint(bp_notifications, url_prefix="/notifications")
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(_deadline_scan_job, "interval", minutes=1, id="deadline_scan_every_10m")
+# kick one pass a few seconds after startup so you get immediate notis when the server comes up
+scheduler.add_job(_deadline_scan_job, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=5), id="deadline_scan_bootstrap")
+scheduler.start()
 def _iso_utc(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -163,9 +188,7 @@ def options_task_detail(task_id):
 @app.route("/members", methods=["OPTIONS"])
 def options_members():
     return _preflight_ok()
-@app.route("/notifications/run_deadline_scan", methods=["OPTIONS"])
-def options_deadline_scan():
-    return _preflight_ok()
+
 # --- collections ---
 users_collection = db["users"]
 projects_collection = db["projects"]
@@ -315,17 +338,12 @@ def serve_upload(filename):
            # .../src
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_admins; if not available, write records for all admin-like users.
-    """
     try:
-        # If your notifier module is present, prefer it.
         notify_admins(kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
-    # Fallback: insert a notification document for each adminish user.
     admin_roles = ["admin", "owner", "superadmin"]
     admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
     now = datetime.now(timezone.utc)
@@ -333,7 +351,7 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ FIX: must be 'message' (not 'body')
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -341,27 +359,37 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     for uid in admin_ids:
         try:
             notifications_collection.insert_one({**base, "for_user": uid})
+            # ✅ push realtime
+            socketio.emit("notify:new", {
+                "type": base["type"],
+                "title": base["title"],
+                "body": base["message"],
+                "data": base["data"],
+                "created_at": base["created_at"].isoformat().replace("+00:00", "Z"),
+                "read": False,
+            }, namespace="/rt", to=f"user:{str(uid)}")
+
+            # optional: push unread count for the bell
+            cnt = notifications_collection.count_documents({"for_user": uid, "read": {"$ne": True}})
+            socketio.emit("notifications:unread_count",
+                {"user_id": str(uid), "count": int(cnt)},
+                namespace="/rt", to=f"user:{str(uid)}")
         except Exception:
             pass
 
-# replace your _notify_users with this
+# replace _notify_users in app.py
 def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_users; if not available, write records for each user.
-    """
     try:
-        # this is the function you actually imported at the top
         notify_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
     now = datetime.now(timezone.utc)
-
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ use 'message' in DB
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -376,11 +404,161 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
         except Exception:
             pass
 
+
 def to_object_id(id_str):
     try:
         return ObjectId(id_str)
     except Exception:
         return None
+#Email Sending
+
+# Sending Email
+
+def send_welcome_email(email, position):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    sender_email = os.getenv("SMTP_EMAIL", "yephay123@gmail.com")
+    sender_password = os.getenv("SMTP_PASSWORD", "hijgcbmcfivzteyi")
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = f"Welcome to Our Team - {position} Position"
+    message["From"] = sender_email
+    message["To"] = email
+
+    html = f"""
+    <html>
+    <body>
+        <h2>Welcome to Our Team!</h2>
+        <p>We're excited to have you join us as a <strong>{position}</strong>.</p>
+        <p>Your account has been successfully created with email: {email}</p>
+        <p>We'll be in touch soon with more details about your onboarding process.</p>
+        <br>
+        <p>Best regards,<br>Your Team</p>
+    </body>
+    </html>
+    """
+    message.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, email, message.as_string())
+        print(f"✅ Welcome email sent to {email}")
+    except Exception as e:
+        print(f"❌ Failed to send welcome email to {email}: {e}")
+
+@app.route('/add-member', methods=['POST'])
+def add_newmember():
+    data = request.get_json()
+    email = data['email']
+    position = data['position']
+    send_welcome_email(email, position)
+    return jsonify({"message": "Member added successfully"})
+
+
+#///////////////////////////////////
+# =====================
+# 2. DEADLINE REMINDERS
+# =====================
+def send_deadline_email(to_email, project_name, deadline):
+    smtp_server = "smtp.gmail.com"
+    smtp_port = 587
+    sender_email = os.getenv("SMTP_EMAIL", "yephay123@gmail.com")
+    sender_password = os.getenv("SMTP_PASSWORD", "hijgcbmcfivzteyi")
+
+    message = MIMEMultipart("alternative")
+    message["Subject"] = f"Reminder: {project_name} deadline in 7 days"
+    message["From"] = sender_email
+    message["To"] = to_email
+
+    html = f"""
+    <html>
+    <body>
+        <h2>⏰ Project Deadline Reminder</h2>
+        <p>Hello,</p>
+        <p>The project <b>{project_name}</b> is due on <b>{deadline}</b> (7 days from today).</p>
+        <p>Please make sure all tasks are on track!</p>
+        <br>
+        <p>Best regards,<br>Project Manager</p>
+    </body>
+    </html>
+    """
+    message.attach(MIMEText(html, "html"))
+
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, to_email, message.as_string())
+        print(f"✅ Deadline reminder sent to {to_email}")
+    except Exception as e:
+        print(f"❌ Failed to send deadline reminder: {e}")
+
+
+
+
+def check_deadlines():
+    now_utc = datetime.now(timezone.utc)
+    within_start = now_utc
+    within_end = now_utc + timedelta(days=7, hours=23, minutes=59, seconds=59)
+    exact_start = now_utc + timedelta(days=7)
+    exact_end = exact_start + timedelta(days=1) - timedelta(seconds=1)
+
+    for project in proj_col.find():
+        end_at = project.get("end_at")
+        try:
+            if isinstance(end_at, str):
+                end_at = isoparse(end_at)
+        except ValueError:
+            print(f"❌ Invalid end_at for project {project.get('name')}: {end_at}")
+            continue
+
+        if end_at < now_utc:
+            continue  # skip past deadlines
+        if project.get("status") == "complete":
+            continue  # skip completed projects
+
+        # Determine reminder type
+        if exact_start <= end_at <= exact_end:
+            reminder_type = "exactly 7 days"
+        elif within_start <= end_at <= within_end:
+            reminder_type = "within 7 days"
+        else:
+            continue  # skip if not in either window
+
+        project_name = project.get("name")
+        project_deadline_str = end_at.strftime("%Y-%m-%d %H:%M UTC")
+        project_id = str(project.get("_id"))
+        member_ids = project.get("member_ids", [])
+
+        for member_id in member_ids:
+            user = users_col.find_one({"_id": ObjectId(member_id), "email": {"$exists": True}})
+            if not user:
+                continue
+            member_email = user["email"]
+
+            send_deadline_email(member_email, project_name, project_deadline_str)
+            print(f"📧 Reminder ({reminder_type}) sent to {member_email} for project '{project_name}'")
+
+            noti_col.insert_one({
+                "project_id": project_id,
+                "member_id": member_id,
+                "email": member_email,
+                "sent_at": datetime.utcnow(),
+                "message": f"Deadline reminder ({reminder_type}) for project '{project_name}'"
+            })
+
+
+# =====================
+# 3. SCHEDULER
+# =====================
+scheduler = BackgroundScheduler()
+scheduler.add_job(check_deadlines, "cron", hour=9, minute=0)  # Daily at 09:00 UTC
+scheduler.start()
+print("✅ Scheduler started - deadline reminders active")
+    
+
 # --- helpers to filter self-notifications ------------------------------------
 ADMIN_ROLES = {"admin", "owner", "superadmin"}
 
@@ -982,96 +1160,16 @@ def recompute_and_store_project_progress(project_oid):
 def _as_dt(v):
     """Coerce task end_at into datetime (UTC) best-effort."""
     if isinstance(v, datetime):
-        return v
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)   # ← add UTC if naive
     if not v:
         return None
     try:
-        # ISO string like "2025-09-15T00:00:00Z" or "2025-09-15"
-        return datetime.fromisoformat(str(v).replace("Z","").strip())
+        dt = datetime.fromisoformat(str(v).replace("Z","").strip())
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc) # ← add UTC if naive
     except Exception:
         return None
+    
 
-def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
-    """
-    Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
-    """
-    try:
-        q = {
-            "type": "task_deadline_soon",
-            "created_at": {"$gte": since_dt},
-            "data.task_id": str(task_id)
-        }
-        return notifications_collection.count_documents(q) > 0
-    except Exception:
-        return False
-
-# 1) update function signature and logic
-def scan_upcoming_deadlines(days: int = 7,
-                            lookback_hours: int = 12,
-                            only_for_user: ObjectId | None = None,
-                            include_leader: bool = False) -> dict:
-    now = datetime.now(timezone.utc)
-
-    soon = now + timedelta(days=max(1, int(days)))
-    recent = now - timedelta(hours=max(1, int(lookback_hours)))
-
-    open_status = {"$nin": ["completed", "complete", "done", "finished"]}
-    q = {"status": open_status, "end_at": {"$ne": None}}
-    if only_for_user:
-        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
-
-    cur = tasks_collection.find(q, {"title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
-
-    sent = checked = 0
-    for t in cur:
-        checked += 1
-        end_dt = _as_dt(t.get("end_at"))
-        if not end_dt or not (now <= end_dt <= soon):
-            continue
-        if _already_alerted_recently(t["_id"], recent):
-            continue
-
-        proj = projects_collection.find_one({"_id": t["project_id"]}, {"leader_id": 1, "name": 1})
-        pname = (proj or {}).get("name", "") or "Project"
-        leader_id = (proj or {}).get("leader_id")
-        aid = t.get("assignee_id")
-
-        # recipients: assignee; add leader only if explicitly allowed
-        recipients = []
-        if aid:
-            recipients.append(aid)
-        if include_leader and leader_id and leader_id != aid:
-            recipients.append(leader_id)
-
-        # if we restrict to just one user, enforce strictly
-        if only_for_user:
-            recipients = [r for r in recipients if str(r) == str(only_for_user)]
-
-        if not recipients:
-            continue
-
-        due_str = end_dt.strftime("%b %d, %Y")
-        try:
-            notify_users(
-                user_ids=recipients,
-                kind="task_deadline_soon",
-                title=f"Deadline in {days} day(s) • {pname}",
-                body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
-                data={
-                    "task_id": str(t["_id"]),
-                    "project_id": str(t["project_id"]),
-                    "project_name": pname,
-                    "end_at": end_dt.isoformat() + "Z",
-                    "window_days": int(days)
-                }
-            )
-            sent += len(recipients)
-        except Exception:
-            pass
-
-    return {"checked": checked, "sent": sent}
-
-# -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
     """
     Users.experience may be:
@@ -1173,32 +1271,6 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
         for r in roles:
             _append_experience(uid, r, project_name, when)
 
-# 2) extend the endpoint to accept those flags
-@app.post("/notifications/run_deadline_scan")
-def run_deadline_scan():
-    """
-    POST /notifications/run_deadline_scan
-    Body (all optional):
-      {
-        "days": 7,
-        "lookback_hours": 12,
-        "only_for_user": "<userId or null>",
-        "include_leader": false
-      }
-    """
-    data = request.get_json(silent=True) or {}
-    days = int(data.get("days", 7) or 7)
-    lookback = int(data.get("lookback_hours", 12) or 12)
-    only_for_user = to_object_id(data.get("only_for_user")) if data.get("only_for_user") else None
-    include_leader = bool(data.get("include_leader", False))
-
-    out = scan_upcoming_deadlines(
-        days=days,
-        lookback_hours=lookback,
-        only_for_user=only_for_user,
-        include_leader=include_leader
-    )
-    return jsonify({"ok": True, **out}), 200
 
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
@@ -1307,7 +1379,7 @@ def projects():
                 [doc["leader_id"]],
                 kind="you_were_made_leader",
                 title=f"You were assigned as leader • {doc.get('name','Untitled project')}",
-                body=f"{actor_name or 'An admin'} made you the leader.",
+                body=f"Admin made you the leader.",
                 data={
                     "project_id": str(ins.inserted_id),
                     "project_name": doc.get("name",""),

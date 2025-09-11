@@ -1,8 +1,8 @@
-# src/backend/notifications.py
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 from flask import Blueprint, request, jsonify
 from backend.database import db
+from backend.notifier import notify_users
 
 bp_notifications = Blueprint("notifications", __name__)
 col = db["notifications"]
@@ -13,36 +13,173 @@ def _oid(x):
     except Exception:
         return None
 
-# --- replace _ser(...) ---
+# --- NEW: robust UTC parser (handles naive ISO, "Z", etc.) ---
+def _as_dt_utc(v):
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if not v:
+        return None
+    s = str(v).strip()
+    try:
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+def scan_and_send_deadlines(*, days:int=7, lookback_hours:int=24,
+                            include_leader:bool=False, only_for_user:ObjectId|None=None) -> dict:
+    """
+    Core scanner: find tasks due within the next `days`, de-dupe once per day,
+    and send 'deadline' notifications to assignees (optionally leader).
+    Returns {"checked": N, "sent": M}.
+    """
+    tasks = db["tasks"]
+    notis = db["notifications"]
+    projects = db["projects"]
+
+    now   = datetime.now(timezone.utc)
+    soon  = now + timedelta(days=max(1, int(days)))
+    today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    q = {
+        "status": {"$nin": ["done", "complete", "completed", "finished"]},
+        "end_at": {"$ne": None}
+    }
+    if only_for_user:
+        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
+
+    def _as_dt_utc(v):
+        if isinstance(v, datetime): return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if not v: return None
+        s = str(v).strip()
+        try:
+            if s.endswith("Z"): s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
+
+    checked = 0
+    sent = 0
+    for t in tasks.find(q, {"_id":1,"title":1,"end_at":1,"assignee_id":1,"project_id":1}):
+        checked += 1
+        end_dt = _as_dt_utc(t.get("end_at"))
+        if not end_dt or end_dt > soon:
+            continue
+
+        task_id_str = str(t["_id"])
+        # once per day per task
+        if notis.find_one({
+            "type": "deadline",
+            "created_at": {"$gte": today0},
+            "data.task_id": task_id_str
+        }):
+            continue
+
+        # recipients
+        recipients = []
+        aid = t.get("assignee_id")
+        if aid: recipients.append(aid)
+
+        if include_leader and t.get("project_id"):
+            proj = projects.find_one({"_id": t["project_id"]}, {"leader_id": 1})
+            lid = (proj or {}).get("leader_id")
+            if lid and str(lid) != str(aid):
+                recipients.append(lid)
+
+        if only_for_user:
+            recipients = [r for r in recipients if str(r) == str(only_for_user)]
+        if not recipients:
+            continue
+
+        due_txt = end_dt.isoformat().replace("+00:00", "Z")
+        title = "Deadline approaching"
+        body  = f"‘{t.get('title','Task')}’ is due by {due_txt}."
+        data  = {
+            "task_id": task_id_str,
+            "project_id": (str(t["project_id"]) if t.get("project_id") else None),
+            "end_at": due_txt,
+            "window_days": int(days)
+        }
+
+        try:
+            sent += notify_users(recipients, "deadline", title, body, data)
+        except Exception:
+            pass
+
+    return {"checked": checked, "sent": sent}
+# NEW: derive uid from query, headers, or cookie (so panel works even if it forgets the param)
+def _uid_from_request():
+    candidate = (
+        request.args.get("for_user") or
+        request.args.get("user_id")  or
+        request.headers.get("X-User-Id") or
+        request.cookies.get("user_id")
+    )
+    return _oid(candidate)
+@bp_notifications.route("/run_deadline_scan", methods=["GET","POST"])
+def run_deadline_scan():
+    def _oid(x):
+        from bson import ObjectId
+        try: return ObjectId(str(x))
+        except Exception: return None
+
+    try: days = int(request.args.get("days","7") or 7)
+    except Exception: days = 7
+    try: lookback_hours = int(request.args.get("lookback_hours","24") or 24)
+    except Exception: lookback_hours = 24
+    include_leader = (str(request.args.get("include_leader","0")).strip().lower() in {"1","true","yes","y"})
+    only_for_user = _oid(request.args.get("only_for_user"))
+
+    result = scan_and_send_deadlines(days=days, lookback_hours=lookback_hours,
+                                     include_leader=include_leader, only_for_user=only_for_user)
+    return jsonify(result), 200
+
 def _ser(n):
     created = n.get("created_at")
     if isinstance(created, datetime):
         created = created.isoformat() + "Z"
-    body = n.get("message")  # DB field is 'message'
+    body = n.get("message")           # stored field is 'message'
     return {
         "_id": str(n.get("_id")),
         "type": n.get("type"),
         "title": n.get("title"),
-        "body": body,           # ← UI-friendly
-        "message": body,        # ← keep legacy too
+        "body": body,                  # ← what your UI renders
+        "message": body,               # ← legacy alias
         "data": n.get("data") or {},
         "created_at": created,
         "read": bool(n.get("read")),
     }
 
-@bp_notifications.get("/")
+
+# Support both /notifications and /notifications/ and filtering by unread
+
+# notifications.py
+@bp_notifications.get("/", strict_slashes=False)
+
 def list_notifications():
-    uid = _oid(request.args.get("for_user"))
+    uid = _uid_from_request()
     if not uid:
         return jsonify([]), 200
-    cur = col.find({
-        "$or": [{"for_user": uid}, {"user_id": uid}]   # ← support legacy docs
-    }).sort("created_at", -1).limit(100)
+
+    unread = (request.args.get("unread", "").strip().lower() in {"1","true","yes","y"})
+    q = {"$or": [{"for_user": uid}, {"user_id": uid}]}
+    if unread:
+        q["read"] = {"$ne": True}
+
+    try:
+        limit = int(request.args.get("limit", "100") or 100)
+    except Exception:
+        limit = 100
+
+    cur = col.find(q).sort("created_at", -1).limit(limit)
     return jsonify([_ser(n) for n in cur]), 200
 
 @bp_notifications.get("/unread_count")
 def unread_count():
-    uid = _oid(request.args.get("for_user"))
+    uid = _uid_from_request()
     if not uid:
         return jsonify({"count": 0}), 200
     n = col.count_documents({
@@ -56,7 +193,8 @@ def unread_count():
 @bp_notifications.post("/mark_all_read")
 def mark_all_read():
     data = request.get_json() or {}
-    uid = _oid(data.get("for_user"))
+    # prefer body-provided for_user, else fall back to headers/query/cookie
+    uid = _oid(data.get("for_user")) or _uid_from_request()
     if not uid:
         return jsonify({"updated": 0}), 200
     res = col.update_many(
@@ -65,10 +203,8 @@ def mark_all_read():
     )
     return jsonify({"updated": int(res.modified_count)}), 200
 
-
 @bp_notifications.route("/<nid>", methods=["DELETE", "OPTIONS"])
 def delete_notification(nid):
-    # handle preflight cleanly
     if request.method == "OPTIONS":
         return ("", 204)
     try:

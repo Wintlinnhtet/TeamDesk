@@ -1,5 +1,5 @@
 // src/frontend/components/Projects.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState , useRef} from "react";
 import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 import useRealtime from "../hooks/useRealtime"; // add this import
@@ -241,6 +241,47 @@ const sockRef = useRealtime(null, {
       );
     },
       });
+  const joinedRef = useRef(new Set());
+  useEffect(() => {
+  const socket = sockRef.current;
+  if (!socket) return;
+
+  // compute current project ids
+  const nextIds = new Set(
+    (items || [])
+      .map(p => p?._id?.$oid || p?._id)
+      .filter(Boolean)
+  );
+
+  // join newly added project rooms
+  nextIds.forEach(id => {
+    if (!joinedRef.current.has(id)) {
+      socket.emit("join", { projectId: id });
+      joinedRef.current.add(id);
+    }
+  });
+
+  // leave rooms for projects that are no longer listed
+  [...joinedRef.current].forEach(id => {
+    if (!nextIds.has(id)) {
+      socket.emit("leave", { projectId: id });
+      joinedRef.current.delete(id);
+    }
+  });
+
+  // ensure we re-join after reconnects
+  const rejoin = () => {
+    joinedRef.current.forEach(id => socket.emit("join", { projectId: id }));
+  };
+  socket.on("connect", rejoin);
+
+  // cleanup on unmount
+  return () => {
+    socket.off("connect", rejoin);
+    joinedRef.current.forEach(id => socket.emit("leave", { projectId: id }));
+    joinedRef.current.clear();
+  };
+}, [items, sockRef]);
   // Toggle confirm -> PATCH { confirm: 1 | 0 }
   const toggleConfirm = async (project, next) => {
     const id = project._id?.$oid || project._id;

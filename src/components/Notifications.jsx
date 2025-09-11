@@ -11,10 +11,13 @@ export default function Notifications({ currentUserId, open, onClose, onCountCha
     if (!open || !currentUserId) return;
     try {
       setLoading(true);
-      const res = await fetch(
-        `${API_BASE}/notifications?for_user=${encodeURIComponent(currentUserId)}`,
-        { credentials: "include" }
-      );
+       const url = new URL(`${API_BASE}/notifications/`);
+url.searchParams.set("for_user", currentUserId);
+ const res = await fetch(url.toString(), { credentials: "include" });
+ if (!res.ok) {
+   const txt = await res.text().catch(() => "");
+   throw new Error(`GET ${url} -> ${res.status} ${txt}`);
+ }
       const json = await res.json().catch(() => []);
       setItems(Array.isArray(json) ? json : []);
     } finally {
@@ -64,8 +67,10 @@ export default function Notifications({ currentUserId, open, onClose, onCountCha
           <div key={n._id} className="px-4 py-3 border-b last:border-b-0 flex items-start gap-3">
             <div className="flex-1">
               <div className="text-sm font-medium text-slate-800">{n.title || n.type}</div>
-              <div className="text-xs text-slate-600 mt-1">{n.message}</div>
-              <div className="text-[11px] text-slate-400 mt-1">{new Date(n.created_at).toLocaleString()}</div>
+              <div className="text-xs text-slate-600 mt-1">{n.body || n.message || n.text || ""}</div>
+<div className="text-[11px] text-slate-400 mt-1">
+   {(n.created_at || n.createdAt) ? new Date(n.created_at || n.createdAt).toLocaleString() : ""}
+ </div>
             </div>
             <button
   onClick={() => deleteOne(n)}
