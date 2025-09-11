@@ -4,6 +4,7 @@ import io from "socket.io-client";
 import {
   FaFolder, FaFileAlt, FaFileExcel, FaFileCsv, FaFileCode, FaFileImage, FaFilePdf, FaCloud, FaHdd, FaSearch
 } from "react-icons/fa";
+import * as XLSX from "xlsx";
 
 const API_URL = "http://localhost:5000/api";
 const SOCKET_URL = "http://localhost:5000/rt";
@@ -165,13 +166,18 @@ function FileManager() {
   const handlePreview = async (fileId, filename) => {
     const userId = getUserId();
     if (!userId) return alert("Not logged in!");
+
     try {
       const res = await axios.get(`${API_URL}/files/${fileId}`, {
         headers: { "X-User-Id": userId },
         responseType: "blob",
       });
-      const blobUrl = window.URL.createObjectURL(new Blob([res.data], { type: res.data.type || "application/octet-stream" }));
-      setPreviewFile({ url: blobUrl, name: filename });
+
+      const mimeType = res.data.type || "application/octet-stream";
+      const blob = new Blob([res.data], { type: mimeType });
+      const blobUrl = window.URL.createObjectURL(blob);
+
+      setPreviewFile({ url: blobUrl, name: filename, type: mimeType });
     } catch (err) {
       alert(err.response?.data?.error || "Failed to preview file");
     }
@@ -332,9 +338,6 @@ function FileManager() {
         ))}
       </div>
 
-
-
-
       {/* Files */}
       {activeFolder ? (
         // Files in the selected folder
@@ -427,10 +430,118 @@ function FileManager() {
       ) : (
         <div className="text-gray-500">Select a folder to view files</div>
       )}
+      {/* File Preview Modal */}
+      {previewFile && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-white p-4 rounded shadow-lg max-w-4xl max-h-[90vh] overflow-auto relative">
+            {/* Close button */}
+            <button
+              onClick={() => setPreviewFile(null)}
+              className="absolute top-2 right-2 bg-red-500 text-white px-2 py-1 rounded"
+            >
+              ✕
+            </button>
+
+            <h2 className="text-lg font-semibold mb-2">{previewFile.name}</h2>
+
+      {/* Universal preview */}
+      {previewFile.type.startsWith("image/") ? (
+        <img
+          src={previewFile.url}
+          alt={previewFile.name}
+          className="max-h-[75vh] object-contain mx-auto"
+        />
+              ) : previewFile.type === "application/pdf" ? (
+                <iframe
+                  src={previewFile.url}
+                  className="w-[80vw] h-[75vh]"
+                  title="PDF Preview"
+                />
+              ) : previewFile.type.startsWith("text/") ||
+                ["application/javascript", "application/json"].includes(previewFile.type) ||
+                previewFile.name.match(/\.(py|css|html)$/i) ? (
+                <iframe
+                  src={previewFile.url}
+                  className="w-[80vw] h-[75vh]"
+                  title="Text/Code Preview"
+                />
+              ) : previewFile.name.match(/\.(csv|xls|xlsx)$/i) ? (
+                <ExcelPreview file={previewFile} />
+              ) : previewFile.name.match(/\.(doc|docx)$/i) ? (
+                <p className="text-gray-600">
+                  Word documents can’t be previewed.{" "}
+                  <a
+                    href={previewFile.url}
+                    download={previewFile.name}
+                    className="text-blue-600 underline"
+                  >
+                    Download instead
+                  </a>
+                </p>
+              ) : previewFile.type.startsWith("audio/") ? (
+                <audio controls className="w-full">
+                  <source src={previewFile.url} type={previewFile.type} />
+                  Your browser does not support audio playback.
+                </audio>
+              ) : previewFile.type.startsWith("video/") ? (
+                <video controls className="max-h-[75vh] w-auto mx-auto">
+                  <source src={previewFile.url} type={previewFile.type} />
+                  Your browser does not support video playback.
+                </video>
+              ) : (
+                <p className="text-gray-600">
+                  Preview not supported.{" "}
+                  <a
+                    href={previewFile.url}
+                    download={previewFile.name}
+                    className="text-blue-600 underline"
+                  >
+                    Download instead
+                  </a>
+                </p>
+              )}
+
+        </div>
+      </div>
+    )}
 
     </div>
   );
 
+}
+
+// ---------------- Excel/CSV Preview Component ----------------
+function ExcelPreview({ file }) {
+  const [rows, setRows] = useState([]);
+
+  useEffect(() => {
+    fetch(file.url)
+      .then((res) => res.arrayBuffer())
+      .then((data) => {
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName], { header: 1 });
+        setRows(sheet);
+      });
+  }, [file]);
+
+  return (
+    <div className="overflow-auto max-h-[70vh] border rounded">
+      <table className="border-collapse border border-gray-300 w-full text-sm">
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i}>
+              {row.map((cell, j) => (
+                <td key={j} className="border px-2 py-1">
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 export default FileManager;
