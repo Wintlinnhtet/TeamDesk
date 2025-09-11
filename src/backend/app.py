@@ -5,7 +5,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
 # at the top of app.py
 from datetime import datetime, timedelta, timezone
-
+from apscheduler.schedulers.background import BackgroundScheduler
 import json
 from flask_socketio import emit, join_room, leave_room
 import re
@@ -106,6 +106,16 @@ CORS(
 
 
 
+# run once at boot and then every 10 minutes
+def _deadline_scan_job():
+    try:
+        # import inside the job to avoid circular imports on app startup
+        from backend.notifications import scan_and_send_deadlines
+        res = scan_and_send_deadlines(days=7, lookback_hours=24, include_leader=False)
+        # (optional) you can log res if you have logging configured
+        # print("deadline scan:", res)
+    except Exception:
+        pass
 
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
@@ -139,6 +149,11 @@ def catch_all_options(path):
 
 # where you create the app and register blueprints
 app.register_blueprint(bp_notifications, url_prefix="/notifications")
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(_deadline_scan_job, "interval", minutes=1, id="deadline_scan_every_10m")
+# kick one pass a few seconds after startup so you get immediate notis when the server comes up
+scheduler.add_job(_deadline_scan_job, "date", run_date=datetime.now(timezone.utc) + timedelta(seconds=5), id="deadline_scan_bootstrap")
+scheduler.start()
 def _iso_utc(dt: datetime) -> str:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
@@ -1009,88 +1024,7 @@ def _as_dt(v):
     except Exception:
         return None
     
-def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
-    """
-    Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
-    """
-    try:
-        q = {
-            "type": "deadline",
-            "created_at": {"$gte": since_dt},
-            "data.task_id": str(task_id)
-        }
-        return notifications_collection.count_documents(q) > 0
-    except Exception:
-        return False
 
-# 1) update function signature and logic
-def scan_upcoming_deadlines(days: int = 7,
-                            lookback_hours: int = 12,
-                            only_for_user: ObjectId | None = None,
-                            include_leader: bool = False) -> dict:
-    now = datetime.now(timezone.utc)
-
-    soon = now + timedelta(days=max(1, int(days)))
-    recent = now - timedelta(hours=max(1, int(lookback_hours)))
-
-    open_status = {"$nin": ["completed", "complete", "done", "finished"]}
-    q = {"status": open_status, "end_at": {"$ne": None}}
-    if only_for_user:
-        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
-
-    cur = tasks_collection.find(q, {"title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
-
-    sent = checked = 0
-    for t in cur:
-        checked += 1
-        end_dt = _as_dt(t.get("end_at"))
-        if not end_dt or not (now <= end_dt <= soon):
-            continue
-        if _already_alerted_recently(t["_id"], recent):
-            continue
-
-        proj = projects_collection.find_one({"_id": t["project_id"]}, {"leader_id": 1, "name": 1})
-        pname = (proj or {}).get("name", "") or "Project"
-        leader_id = (proj or {}).get("leader_id")
-        aid = t.get("assignee_id")
-
-        # recipients: assignee; add leader only if explicitly allowed
-        recipients = []
-        if aid:
-            recipients.append(aid)
-        if include_leader and leader_id and leader_id != aid:
-            recipients.append(leader_id)
-
-        # if we restrict to just one user, enforce strictly
-        if only_for_user:
-            recipients = [r for r in recipients if str(r) == str(only_for_user)]
-
-        if not recipients:
-            continue
-
-        due_str = end_dt.strftime("%b %d, %Y")
-        try:
-            notify_users(
-                user_ids=recipients,
-                kind="deadline",
-                title=f"Deadline in {days} day(s) • {pname}",
-                body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
-                data={
-    "task_id": str(t["_id"]),
-    "project_id": str(t["project_id"]),
-    "project_name": pname,
-    "end_at": end_dt.isoformat().replace("+00:00","Z"),
-    "window_days": int(days)
-}
-
-            )
-            sent += len(recipients)
-        except Exception:
-            pass
-
-    return {"checked": checked, "sent": sent}
-
-# -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
     """
     Users.experience may be:

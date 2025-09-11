@@ -28,80 +28,65 @@ def _as_dt_utc(v):
     except Exception:
         return None
 
-@bp_notifications.post("/run_deadline_scan")
-def run_deadline_scan():
+def scan_and_send_deadlines(*, days:int=7, lookback_hours:int=24,
+                            include_leader:bool=False, only_for_user:ObjectId|None=None) -> dict:
     """
-    Create 'deadline' notifications for tasks due within the next `days` (default 1 day).
-    De-dupe once per task per day.
-    Optional query params:
-      - days: int (default 1)
-      - lookback_hours: int (default 24)  # kept for parity, not strictly needed here
-      - include_leader: 0/1 (default 0)
-      - only_for_user: user id (limit to a single user)
+    Core scanner: find tasks due within the next `days`, de-dupe once per day,
+    and send 'deadline' notifications to assignees (optionally leader).
+    Returns {"checked": N, "sent": M}.
     """
     tasks = db["tasks"]
     notis = db["notifications"]
     projects = db["projects"]
 
-    # --- read options ---
-    try:
-        days = int(request.args.get("days", "1") or 1)
-    except Exception:
-        days = 1
-    try:
-        lookback_hours = int(request.args.get("lookback_hours", "24") or 24)
-    except Exception:
-        lookback_hours = 24
-    include_leader = (str(request.args.get("include_leader", "0")).strip().lower() in {"1","true","yes","y"})
-    only_for_user = _oid(request.args.get("only_for_user"))
-
-    now = datetime.now(timezone.utc)
-    soon = now + timedelta(days=max(1, days))
+    now   = datetime.now(timezone.utc)
+    soon  = now + timedelta(days=max(1, int(days)))
     today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    # kept for future use if you want to skip duplicates in a rolling window
-    recent = now - timedelta(hours=max(1, lookback_hours))
 
-    # --- find candidate tasks (not done, with end_at) ---
     q = {
         "status": {"$nin": ["done", "complete", "completed", "finished"]},
         "end_at": {"$ne": None}
     }
     if only_for_user:
-        # tolerate ObjectId / string in your collection
         q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
 
-    cur = tasks.find(q, {"_id": 1, "title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
+    def _as_dt_utc(v):
+        if isinstance(v, datetime): return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if not v: return None
+        s = str(v).strip()
+        try:
+            if s.endswith("Z"): s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            return None
 
     checked = 0
     sent = 0
-    for t in cur:
+    for t in tasks.find(q, {"_id":1,"title":1,"end_at":1,"assignee_id":1,"project_id":1}):
         checked += 1
         end_dt = _as_dt_utc(t.get("end_at"))
-        if not end_dt:
-            continue
-        if end_dt > soon:
+        if not end_dt or end_dt > soon:
             continue
 
         task_id_str = str(t["_id"])
-
-        # --- daily de-dupe: ensure we didn't already create a deadline noti for this task today ---
+        # once per day per task
         if notis.find_one({
             "type": "deadline",
             "created_at": {"$gte": today0},
-            "data.task_id": task_id_str   # ✅ compare string with string
+            "data.task_id": task_id_str
         }):
             continue
 
-        # --- recipients: assignee (and optionally project leader) ---
+        # recipients
         recipients = []
         aid = t.get("assignee_id")
-        if aid:
-            recipients.append(aid)
+        if aid: recipients.append(aid)
 
         if include_leader and t.get("project_id"):
             proj = projects.find_one({"_id": t["project_id"]}, {"leader_id": 1})
             lid = (proj or {}).get("leader_id")
-            if lid and str(lid) != str(aid):  # avoid sending twice to same person
+            if lid and str(lid) != str(aid):
                 recipients.append(lid)
 
         if only_for_user:
@@ -111,8 +96,8 @@ def run_deadline_scan():
 
         due_txt = end_dt.isoformat().replace("+00:00", "Z")
         title = "Deadline approaching"
-        body = f"‘{t.get('title', 'Task')}’ is due by {due_txt}."
-        data = {
+        body  = f"‘{t.get('title','Task')}’ is due by {due_txt}."
+        data  = {
             "task_id": task_id_str,
             "project_id": (str(t["project_id"]) if t.get("project_id") else None),
             "end_at": due_txt,
@@ -120,16 +105,11 @@ def run_deadline_scan():
         }
 
         try:
-            # notifier.notify_users writes 'message' in DB and emits realtime
-            notify_users(recipients, "deadline", title, body, data)
-            sent += len(recipients)
+            sent += notify_users(recipients, "deadline", title, body, data)
         except Exception:
-            # best-effort; keep scanning
             pass
 
-    return jsonify({"checked": checked, "sent": sent}), 200
-
-
+    return {"checked": checked, "sent": sent}
 # NEW: derive uid from query, headers, or cookie (so panel works even if it forgets the param)
 def _uid_from_request():
     candidate = (
@@ -139,6 +119,23 @@ def _uid_from_request():
         request.cookies.get("user_id")
     )
     return _oid(candidate)
+@bp_notifications.route("/run_deadline_scan", methods=["GET","POST"])
+def run_deadline_scan():
+    def _oid(x):
+        from bson import ObjectId
+        try: return ObjectId(str(x))
+        except Exception: return None
+
+    try: days = int(request.args.get("days","7") or 7)
+    except Exception: days = 7
+    try: lookback_hours = int(request.args.get("lookback_hours","24") or 24)
+    except Exception: lookback_hours = 24
+    include_leader = (str(request.args.get("include_leader","0")).strip().lower() in {"1","true","yes","y"})
+    only_for_user = _oid(request.args.get("only_for_user"))
+
+    result = scan_and_send_deadlines(days=days, lookback_hours=lookback_hours,
+                                     include_leader=include_leader, only_for_user=only_for_user)
+    return jsonify(result), 200
 
 def _ser(n):
     created = n.get("created_at")
