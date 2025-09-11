@@ -69,16 +69,7 @@ const Dashboard = () => {
       projectName: projectsById[t.project_id]?.name || "Untitled project",
     }));
   }, [tasks, projectsById]);
- const normId = (x) => {
-   if (!x) return null;
-   if (typeof x === "object") {
-     // cases: {_id: ...}, {$oid: "..."}
-     if (x.$oid) return String(x.$oid);
-     if (x._id)  return normId(x._id);
-     return null;
-   }
-   try { return String(x); } catch { return null; }
- };
+
   const today = new Date();
   const monthLabel = today.toLocaleString("en-US", { month: "long" });
   const dayLabel = `${today.getDate()}, ${today.toLocaleString("en-US", { weekday: "short" })}`;
@@ -152,17 +143,14 @@ const Dashboard = () => {
   // Load user details, projects, tasks
   useEffect(() => {
     if (!user?._id) {
-      
+      setMsg("Please sign in again.");
       return;
     }
     (async () => {
       try {
         const uRes = await fetch(`${API_BASE}/get-user/${user._id}`);
         const uData = await uRes.json();
-        if (uRes.ok) 
-          {setExperience(uData.experience ?? []);
-          localStorage.setItem("user", JSON.stringify(uData));
-          sessionStorage.setItem("user", JSON.stringify(uData));}
+        if (uRes.ok) setExperience(uData.experience ?? []);
         else console.warn("get-user failed:", uData);
 
         const pRes = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
@@ -198,10 +186,9 @@ const Dashboard = () => {
             if (!r.ok) throw new Error(d.error || `Failed ${r.status}`);
             const arr = Array.isArray(d.members) ? d.members : [];
             for (const m of arr) {
-              const mid = normId(m?._id) || normId(m?.id);
-             const selfId = normId(user?._id);
-             if (!mid || (selfId && mid === selfId)) continue;
-             memberIds.add(mid);
+              const mid = m?._id || m?.id;
+              if (!mid || mid === user?._id) continue;
+              memberIds.add(String(mid));
             }
           })
         );
@@ -219,24 +206,23 @@ const Dashboard = () => {
         const list = Array.isArray(json) ? json : [];
 
         // Map _id -> { name, title?, img }
-        const byId = new Map();
-       for (const u of list) {
-         const id = normId(u._id);
-         if (!id) continue;
-         byId.set(id, {
-           _id: id,
-           name: u.name ,
-           title: "Member",
-           img: buildImageUrl(u.picture || ""),
-         });
-       }
+        const byId = new Map(
+          list.map((u) => [
+            String(u._id),
+            {
+              _id: String(u._id),
+              name: u.name || u.email || "Member",
+              title: "Member",
+              img: buildImageUrl(u.picture || ""),
+            },
+          ])
+        );
 
         // Build final unique list in a stable order
         const out = Array.from(memberIds).map((id) => {
-         const m = byId.get(id);
-         return m || { _id: id, name: "Member", title: "Member", img: "" };
-       });
-
+          const m = byId.get(String(id));
+          return m || { _id: String(id), name: "Member", title: "Member", img: "" };
+        });
 
         if (!cancelled) setBatchmates(out);
       } catch (e) {
@@ -248,29 +234,6 @@ const Dashboard = () => {
       cancelled = true;
     };
   }, [projects, user?._id]);
-useEffect(() => {
-  const key = `deadlineScanLastRun:${user?._id || 'anon'}`;
-  const last = Number(localStorage.getItem(key) || 0);
-  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
-
-  // DEV: allow Ctrl/Cmd+Shift+R to re-run immediately by ignoring the cache (optional)
-  const skipCache = false; // set true while testing
-
-  if (!skipCache && Date.now() - last < TWELVE_HOURS) return;
-
-  (async () => {
-    try {
-      await fetch(`${API_BASE}/notifications/run_deadline_scan`, {
-        method: "POST",
-        credentials: "include",                 // ← add; keeps CORS happy
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ days: 7, lookback_hours: 12 })
-      });
-    } catch {}
-    localStorage.setItem(key, String(Date.now()));
-  })();
-}, [user?._id]);
-
 
   return (
     <div className="ml-5 w-full">
@@ -278,7 +241,7 @@ useEffect(() => {
       <div className="mt-2 mb-2 flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-black">
-            Hello {user?.name }
+            Hello {user?.name || user?.email || ""}
           </h1>
           <p className="text-sm" style={{ color: customColor }}>
             Let's finish your task today!
@@ -390,7 +353,7 @@ useEffect(() => {
         <div className="flex flex-col w-1/4 space-y-4 mr-10">
           <div className="p-3 rounded-lg" style={{ backgroundColor: customColor }}>
             <h2 className="text-xl font-bold text-white">
-              {user?.name }
+              {user?.name || user?.email || "User"}
             </h2>
             <p className="text-white">{user?.role || "Member"}</p>
 

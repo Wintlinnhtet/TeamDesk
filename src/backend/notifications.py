@@ -1,5 +1,6 @@
 # src/backend/notifications.py
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from backend.notifier import notify_users
 from bson import ObjectId
 from flask import Blueprint, request, jsonify
 from backend.database import db
@@ -12,7 +13,49 @@ def _oid(x):
         return ObjectId(str(x))
     except Exception:
         return None
+@bp_notifications.post("/run_deadline_scan")
+def run_deadline_scan():
+    """Create deadline notifications for tasks due in next 24h or overdue (not done)."""
+    from backend.database import db
+    tasks = db["tasks"]
+    users = db["users"]
+    notis = db["notifications"]
 
+    now = datetime.now(timezone.utc)
+    soon = now + timedelta(hours=24)
+
+    # find tasks not completed and with end_at <= soon
+    q = {
+        "status": {"$nin": ["done", "complete", "completed"]},
+        "end_at": {"$lte": soon}
+    }
+    cur = tasks.find(q, {"_id": 1, "title": 1, "end_at": 1, "assignee_id": 1})
+    created = 0
+
+    for t in cur:
+        assignee = t.get("assignee_id")
+        if not assignee:
+            continue
+        # de-dupe: skip if we already notified for this task today
+        already = notis.find_one({
+            "for_user": assignee,
+            "type": "deadline",
+            "data.task_id": t["_id"],
+            "created_at": {"$gte": now.replace(hour=0, minute=0, second=0, microsecond=0)}
+        })
+        if already:
+            continue
+        # build message
+        due = t.get("end_at")
+        due_txt = due.astimezone(timezone.utc).isoformat().replace("+00:00", "Z") if isinstance(due, datetime) else ""
+        msg = f"Task deadline approaching: {t.get('title','(untitled)')} (due {due_txt})"
+        data = {"task_id": str(t["_id"]), "due_at": due_txt}
+
+        # insert+emit (one row for the assignee)
+        notify_users([assignee], "deadline", "Deadline", msg, data)  # emits notify:new
+        created += 1
+
+    return jsonify({"created": created}), 200
 # NEW: derive uid from query, headers, or cookie (so panel works even if it forgets the param)
 def _uid_from_request():
     candidate = (

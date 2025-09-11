@@ -46,7 +46,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "192.168.1.8"
+SERVER_IP = "192.168.1.7"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -56,7 +56,7 @@ FRONTEND_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5137",
     f"http://{SERVER_IP}:5137",
-    f"http://{SERVER_IP}:5137",
+    
 ]
 
 socketio.init_app(
@@ -79,6 +79,19 @@ def on_leave(data):
     pid = data.get("projectId")
     if pid:
         leave_room(pid)
+# --- user rooms (one room per user) ---
+@socketio.on("user:join", namespace="/rt")
+def on_user_join(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        join_room(f"user:{uid}")
+
+@socketio.on("user:leave", namespace="/rt")
+def on_user_leave(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        leave_room(f"user:{uid}")
+
 # after FRONTEND_ORIGINS
 ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name", "X-User-Id"]
 
@@ -315,17 +328,12 @@ def serve_upload(filename):
            # .../src
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_admins; if not available, write records for all admin-like users.
-    """
     try:
-        # If your notifier module is present, prefer it.
         notify_admins(kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
-    # Fallback: insert a notification document for each adminish user.
     admin_roles = ["admin", "owner", "superadmin"]
     admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
     now = datetime.now(timezone.utc)
@@ -333,7 +341,7 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ FIX: must be 'message' (not 'body')
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -341,9 +349,24 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     for uid in admin_ids:
         try:
             notifications_collection.insert_one({**base, "for_user": uid})
+            # ✅ push realtime
+            socketio.emit("notify:new", {
+                "type": base["type"],
+                "title": base["title"],
+                "body": base["message"],
+                "data": base["data"],
+                "created_at": base["created_at"].isoformat().replace("+00:00", "Z"),
+                "read": False,
+            }, namespace="/rt", to=f"user:{str(uid)}")
+
+            # optional: push unread count for the bell
+            cnt = notifications_collection.count_documents({"for_user": uid, "read": {"$ne": True}})
+            socketio.emit("notifications:unread_count",
+                {"user_id": str(uid), "count": int(cnt)},
+                namespace="/rt", to=f"user:{str(uid)}")
         except Exception:
             pass
-
+        
 # replace your _notify_users with this
 def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
     """
@@ -982,15 +1005,15 @@ def recompute_and_store_project_progress(project_oid):
 def _as_dt(v):
     """Coerce task end_at into datetime (UTC) best-effort."""
     if isinstance(v, datetime):
-        return v
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)   # ← add UTC if naive
     if not v:
         return None
     try:
-        # ISO string like "2025-09-15T00:00:00Z" or "2025-09-15"
-        return datetime.fromisoformat(str(v).replace("Z","").strip())
+        dt = datetime.fromisoformat(str(v).replace("Z","").strip())
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc) # ← add UTC if naive
     except Exception:
         return None
-
+    
 def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
     """
     Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
@@ -1054,7 +1077,7 @@ def scan_upcoming_deadlines(days: int = 7,
         try:
             notify_users(
                 user_ids=recipients,
-                kind="task_deadline_soon",
+                kind="deadline",
                 title=f"Deadline in {days} day(s) • {pname}",
                 body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
                 data={
@@ -1293,7 +1316,7 @@ def projects():
                 [doc["leader_id"]],
                 kind="you_were_made_leader",
                 title=f"You were assigned as leader • {doc.get('name','Untitled project')}",
-                body=f"{actor_name or 'An admin'} made you the leader.",
+                body=f"Admin made you the leader.",
                 data={
                     "project_id": str(ins.inserted_id),
                     "project_name": doc.get("name",""),
