@@ -41,7 +41,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "172.20.1.227"
+SERVER_IP = "192.168.1.7"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -51,7 +51,7 @@ FRONTEND_ORIGINS = [
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5137",
     f"http://{SERVER_IP}:5137",
-    f"http://{SERVER_IP}:5137",
+    
 ]
 
 socketio.init_app(
@@ -74,6 +74,19 @@ def on_leave(data):
     pid = data.get("projectId")
     if pid:
         leave_room(pid)
+# --- user rooms (one room per user) ---
+@socketio.on("user:join", namespace="/rt")
+def on_user_join(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        join_room(f"user:{uid}")
+
+@socketio.on("user:leave", namespace="/rt")
+def on_user_leave(data):
+    uid = (data or {}).get("userId")
+    if uid:
+        leave_room(f"user:{uid}")
+
 # after FRONTEND_ORIGINS
 ALLOWED_HEADERS = ["Content-Type", "Authorization", "X-Actor-Id", "X-Actor-Name", "X-User-Id"]
 
@@ -105,6 +118,7 @@ def _preflight_ok():
     for k, v in h.items():
         resp.headers[k] = v
     return resp
+
 
 # ❌ REMOVE this old handler:
 # @app.before_request
@@ -158,9 +172,7 @@ def options_task_detail(task_id):
 @app.route("/members", methods=["OPTIONS"])
 def options_members():
     return _preflight_ok()
-@app.route("/notifications/run_deadline_scan", methods=["OPTIONS"])
-def options_deadline_scan():
-    return _preflight_ok()
+
 # --- collections ---
 users_collection = db["users"]
 projects_collection = db["projects"]
@@ -310,17 +322,12 @@ def serve_upload(filename):
            # .../src
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_admins; if not available, write records for all admin-like users.
-    """
     try:
-        # If your notifier module is present, prefer it.
         notify_admins(kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
-    # Fallback: insert a notification document for each adminish user.
     admin_roles = ["admin", "owner", "superadmin"]
     admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
     now = datetime.now(timezone.utc)
@@ -328,7 +335,7 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ FIX: must be 'message' (not 'body')
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -336,27 +343,37 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     for uid in admin_ids:
         try:
             notifications_collection.insert_one({**base, "for_user": uid})
+            # ✅ push realtime
+            socketio.emit("notify:new", {
+                "type": base["type"],
+                "title": base["title"],
+                "body": base["message"],
+                "data": base["data"],
+                "created_at": base["created_at"].isoformat().replace("+00:00", "Z"),
+                "read": False,
+            }, namespace="/rt", to=f"user:{str(uid)}")
+
+            # optional: push unread count for the bell
+            cnt = notifications_collection.count_documents({"for_user": uid, "read": {"$ne": True}})
+            socketio.emit("notifications:unread_count",
+                {"user_id": str(uid), "count": int(cnt)},
+                namespace="/rt", to=f"user:{str(uid)}")
         except Exception:
             pass
 
-# replace your _notify_users with this
+# replace _notify_users in app.py
 def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict | None = None):
-    """
-    Try backend.notifier.notify_users; if not available, write records for each user.
-    """
     try:
-        # this is the function you actually imported at the top
         notify_users(user_ids=user_ids, kind=kind, title=title, body=body, data=data or {})
         return
     except Exception:
         pass
 
     now = datetime.now(timezone.utc)
-
     base = {
         "type": kind,
         "title": title,
-        "body": body,
+        "message": body,          # ✅ use 'message' in DB
         "data": data or {},
         "created_at": now,
         "read": False,
@@ -370,6 +387,7 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
             notifications_collection.insert_one({**base, "for_user": uid_obj})
         except Exception:
             pass
+
 
 def to_object_id(id_str):
     try:
@@ -1061,7 +1079,8 @@ def recompute_and_store_project_progress(project_oid):
     # 3) Persist the new progress
     projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.now(timezone.utc)
 }})
-
+    payload = {"project_id": str(pid), "progress": new_pct}
+    socketio.emit("project:progress", payload, namespace="/rt", to=str(pid))
     # 4) Actor (from headers/body) for exclusion in notifications
     try:
         actor_id, actor_name = _actor_from_request(request.get_json(silent=True) or {})
@@ -1125,22 +1144,22 @@ def recompute_and_store_project_progress(project_oid):
 def _as_dt(v):
     """Coerce task end_at into datetime (UTC) best-effort."""
     if isinstance(v, datetime):
-        return v
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)   # ← add UTC if naive
     if not v:
         return None
     try:
-        # ISO string like "2025-09-15T00:00:00Z" or "2025-09-15"
-        return datetime.fromisoformat(str(v).replace("Z","").strip())
+        dt = datetime.fromisoformat(str(v).replace("Z","").strip())
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc) # ← add UTC if naive
     except Exception:
         return None
-
+    
 def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
     """
     Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
     """
     try:
         q = {
-            "type": "task_deadline_soon",
+            "type": "deadline",
             "created_at": {"$gte": since_dt},
             "data.task_id": str(task_id)
         }
@@ -1197,16 +1216,17 @@ def scan_upcoming_deadlines(days: int = 7,
         try:
             notify_users(
                 user_ids=recipients,
-                kind="task_deadline_soon",
+                kind="deadline",
                 title=f"Deadline in {days} day(s) • {pname}",
                 body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
                 data={
-                    "task_id": str(t["_id"]),
-                    "project_id": str(t["project_id"]),
-                    "project_name": pname,
-                    "end_at": end_dt.isoformat() + "Z",
-                    "window_days": int(days)
-                }
+    "task_id": str(t["_id"]),
+    "project_id": str(t["project_id"]),
+    "project_name": pname,
+    "end_at": end_dt.isoformat().replace("+00:00","Z"),
+    "window_days": int(days)
+}
+
             )
             sent += len(recipients)
         except Exception:
@@ -1316,32 +1336,6 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
         for r in roles:
             _append_experience(uid, r, project_name, when)
 
-# 2) extend the endpoint to accept those flags
-@app.post("/notifications/run_deadline_scan")
-def run_deadline_scan():
-    """
-    POST /notifications/run_deadline_scan
-    Body (all optional):
-      {
-        "days": 7,
-        "lookback_hours": 12,
-        "only_for_user": "<userId or null>",
-        "include_leader": false
-      }
-    """
-    data = request.get_json(silent=True) or {}
-    days = int(data.get("days", 7) or 7)
-    lookback = int(data.get("lookback_hours", 12) or 12)
-    only_for_user = to_object_id(data.get("only_for_user")) if data.get("only_for_user") else None
-    include_leader = bool(data.get("include_leader", False))
-
-    out = scan_upcoming_deadlines(
-        days=days,
-        lookback_hours=lookback,
-        only_for_user=only_for_user,
-        include_leader=include_leader
-    )
-    return jsonify({"ok": True, **out}), 200
 
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
@@ -1436,7 +1430,7 @@ def projects():
                 [doc["leader_id"]],
                 kind="you_were_made_leader",
                 title=f"You were assigned as leader • {doc.get('name','Untitled project')}",
-                body=f"{actor_name or 'An admin'} made you the leader.",
+                body=f"Admin made you the leader.",
                 data={
                     "project_id": str(ins.inserted_id),
                     "project_name": doc.get("name",""),

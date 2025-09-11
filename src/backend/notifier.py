@@ -5,7 +5,20 @@ from backend.database import db
 
 _notifications = db["notifications"]
 _users = db["users"]
-
+try:
+    from backend.extensions import socketio
+except Exception:
+    socketio = None
+def _emit_user_notification(for_user_oid, payload):
+    if socketio and for_user_oid:
+        socketio.emit("notify:new", payload, namespace="/rt", to=f"user:{str(for_user_oid)}")
+        # also push bell count
+        from backend.database import db
+        col = db["notifications"]
+        unread = col.count_documents({"for_user": for_user_oid, "read": {"$ne": True}})
+        socketio.emit("notifications:unread_count",
+                      {"user_id": str(for_user_oid), "count": int(unread)},
+                      namespace="/rt", to=f"user:{str(for_user_oid)}")
 def _oid(x):
     """Coerce any id-ish value to ObjectId, else None."""
     try:
@@ -49,6 +62,16 @@ def _insert(for_user, kind, title, body, data=None):
         "created_at": datetime.utcnow(),  # always “now” (UTC)
     }
     res = _notifications.insert_one(doc)
+
+    _emit_user_notification(oid, {
+        "_id": str(res.inserted_id),
+        "type": doc["type"],
+        "title": doc["title"],
+        "body": doc["message"],
+        "data": doc.get("data") or {},
+        "created_at": doc["created_at"].isoformat() + "Z",
+        "read": False,
+    })
     return str(res.inserted_id)
 
 def notify_admins(kind, title, body, data=None) -> int:
