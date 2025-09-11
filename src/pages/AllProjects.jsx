@@ -1,9 +1,9 @@
+// src/frontend/components/Projects.jsx
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 import { FiCheckCircle, FiEdit2, FiTrash2 } from "react-icons/fi";
-import { useNavigate } from "react-router-dom";
 
-// ▶ You can keep this true; the helper below will silently no-op if the endpoint isn't there.
 const ENABLE_USER_LOOKUP = true;
 
 /* ---------------- helpers ---------------- */
@@ -12,7 +12,6 @@ const fmtDate = (iso) => {
   const d = new Date(iso);
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 };
-
 const daysLeft = (endAt) => {
   if (!endAt) return null;
   const now = new Date();
@@ -22,25 +21,37 @@ const daysLeft = (endAt) => {
   const diff = Math.ceil((endDay - today) / (1000 * 60 * 60 * 24));
   return diff < 0 ? 0 : diff;
 };
-
 const clampPct = (v) => {
   const n = Number(v);
   if (Number.isNaN(n)) return 0;
   return Math.min(100, Math.max(0, n));
 };
-
 const barToneFor = (pct) => {
   if (pct >= 70) return { track: "bg-rose-200", fill: "bg-violet-600" };
   if (pct >= 40) return { track: "bg-slate-200", fill: "bg-sky-500" };
   return { track: "bg-slate-200", fill: "bg-orange-500" };
 };
-
 const badgeToneFor = (dleft) => {
   if (dleft == null) return { text: "—", cls: "bg-gray-100 text-gray-500" };
   if (dleft === 0) return { text: "Due today", cls: "bg-orange-100 text-orange-700" };
   if (dleft <= 3) return { text: `${dleft} day${dleft === 1 ? "" : "s"} left`, cls: "bg-[#E7D4D8] text-[#AA405B]" };
   if (dleft <= 7) return { text: `${dleft} days left`, cls: "bg-orange-100 text-orange-700" };
   return { text: `${dleft} days left`, cls: "bg-indigo-100 text-indigo-700" };
+};
+
+/* optional actor headers for server-side auditing/notifications */
+const getActorHeaders = () => {
+  try {
+    const u = JSON.parse(localStorage.getItem("user") || "null");
+    const id = u?._id || u?.id;
+    const name = u?.name || u?.email;
+    const h = {};
+    if (id) h["X-Actor-Id"] = String(id);
+    if (name) h["X-Actor-Name"] = String(name);
+    return h;
+  } catch {
+    return {};
+  }
 };
 
 /* --------------- Avatar helpers --------------- */
@@ -51,7 +62,6 @@ const initialFrom = ({ email = "", name = "" }) => {
   if (nm.length > 0) return nm[0].toUpperCase();
   return "?";
 };
-
 const Avatar = ({ email, name, picture, avatar }) => {
   const initial = initialFrom({ email, name });
   const src = picture || avatar || "";
@@ -73,12 +83,9 @@ const Avatar = ({ email, name, picture, avatar }) => {
     </div>
   );
 };
-
-// Renders up to 3 avatars + “+n” and shows a tooltip with ALL member names on hover
 const Avatars = ({ members = [], fallbackCount = 0 }) => {
   const hasMembers = Array.isArray(members) && members.length > 0;
   if (!hasMembers && !fallbackCount) return null;
-
   const shownMembers = hasMembers ? members.slice(0, 3) : [];
   const remainder = hasMembers ? Math.max(0, members.length - 3) : Math.max(0, fallbackCount - 3);
 
@@ -97,17 +104,11 @@ const Avatars = ({ members = [], fallbackCount = 0 }) => {
               ?
             </div>
           ))}
-
       {remainder > 0 && (
-        <div
-          className="w-8 h-8 rounded-full ring-2 ring-white bg-slate-200 flex items-center justify-center text-slate-600 text-xs font-semibold"
-          aria-label={`+${remainder} more`}
-        >
+        <div className="w-8 h-8 rounded-full ring-2 ring-white bg-slate-200 flex items-center justify-center text-slate-600 text-xs font-semibold" aria-label={`+${remainder} more`}>
           +{remainder}
         </div>
       )}
-
-      {/* Tooltip with ALL member names (only if we actually have member objects) */}
       {hasMembers && (
         <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-50 pointer-events-none">
           <div className="max-w-[260px] max-h-56 overflow-auto whitespace-normal text-xs bg-white text-slate-700 border border-slate-200 shadow-lg rounded-md px-3 py-2">
@@ -123,43 +124,21 @@ const Avatars = ({ members = [], fallbackCount = 0 }) => {
   );
 };
 
-/* ---------------- Small UI helpers ---------------- */
-const ActionBtn = ({ children, onClick, title, disabled, variant = "neutral" }) => {
-  const base =
-    "inline-flex items-center gap-2 px-3 py-1.5 rounded-xl shadow transition text-sm font-semibold border";
-  const styles = {
-    neutral: "bg-white/90 hover:bg-white text-slate-800 border-slate-200",
-    success:
-      "bg-green-500 hover:bg-green-600 text-white border-green-600 disabled:bg-emerald-200 disabled:text-emerald-800 disabled:cursor-not-allowed",
-    danger: "bg-white/90 hover:bg-red-50 text-red-600 border-red-300",
-  };
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      disabled={disabled}
-      className={`${base} ${styles[variant]}`}
-    >
-      {children}
-    </button>
-  );
-};
-
 /* ---------------- Project Card ---------------- */
-const ProjectCard = ({ project, onComplete, onEdit, onDelete }) => {
+const ProjectCard = ({ project, onToggleConfirm, onEdit, onDelete }) => {
   const pct = clampPct(project.progress);
   const dleft = daysLeft(project.end_at);
   const tones = barToneFor(pct);
   const badge = badgeToneFor(dleft);
   const customColor = "#AA405B";
-  const isComplete = (project.status || "").toLowerCase() === "complete";
+
+  const isConfirmed =
+    project.confirm === 1 ||
+    project.confirm === "1" ||
+    project.confirm === true;
 
   return (
-    <div
-      className="rounded-2xl text-white shadow-lg p-5 relative overflow-hidden"
-      style={{ backgroundColor: customColor }}
-    >
+    <div className="rounded-2xl text-white shadow-lg p-5 relative overflow-hidden" style={{ backgroundColor: customColor }}>
       {/* Top-right actions */}
       <div className="absolute top-3 right-3 flex gap-2">
         <button
@@ -174,17 +153,15 @@ const ProjectCard = ({ project, onComplete, onEdit, onDelete }) => {
 
         <button
           type="button"
-          onClick={() => onComplete(project)}
-          disabled={isComplete}
-          title={isComplete ? "Already complete" : "Mark as complete"}
-          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border transition 
-            ${isComplete 
-              ? "bg-emerald-200 text-emerald-800 border-emerald-300 cursor-not-allowed" 
-              : "bg-green-500 text-white hover:bg-green-600 border-green-600"
-            }`}
+          onClick={() => onToggleConfirm(project, !isConfirmed)}
+          title={isConfirmed ? "Unconfirm" : "Confirm"}
+          className={`flex items-center gap-1 px-3 py-1.5 rounded-lg border transition
+            ${isConfirmed
+              ? "bg-emerald-200 text-emerald-800 border-emerald-300"
+              : "bg-blue-500 text-white hover:bg-blue-600 border-blue-600"}`}
         >
           <FiCheckCircle className="text-sm" />
-          <span className="text-sm font-medium">{isComplete ? "Completed" : "Complete"}</span>
+          <span className="text-sm font-medium">{isConfirmed ? "Unconfirm" : "Confirm"}</span>
         </button>
 
         <button
@@ -211,6 +188,15 @@ const ProjectCard = ({ project, onComplete, onEdit, onDelete }) => {
         <Avatars members={project._membersResolved} fallbackCount={(project.member_ids || []).length} />
         <div className={`px-3 py-1 rounded-lg text-sm font-semibold ${badge.cls}`}>{badge.text}</div>
       </div>
+
+      {/* Small ribbon showing confirm state */}
+      <div className="absolute left-0 top-0">
+        {isConfirmed && (
+          <div className="m-3 px-2.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-100 text-emerald-700 border border-emerald-300">
+            Confirmed
+          </div>
+        )}
+      </div>
     </div>
   );
 };
@@ -222,16 +208,13 @@ function AllProjects({ forUserId }) {
   const [error, setError] = useState(null);
   const navigate = useNavigate();
 
-  // helper: batch fetch members by ids (SILENT—returns [] on any failure)
   const fetchMembersByIds = async (ids = []) => {
     if (!ENABLE_USER_LOOKUP || !ids.length) return [];
     try {
       const url = new URL(`${API_BASE}/users`);
       url.searchParams.set("ids", ids.join(","));
       const res = await fetch(url.toString(), { credentials: "include" });
-      if (!res.ok) {
-        return [];
-      }
+      if (!res.ok) return [];
       const json = await res.json().catch(() => []);
       return Array.isArray(json) ? json : [];
     } catch {
@@ -239,40 +222,42 @@ function AllProjects({ forUserId }) {
     }
   };
 
-  // PATCH project -> complete
-  const completeProject = async (project) => {
+  // Toggle confirm -> PATCH { confirm: 1 | 0 }
+  const toggleConfirm = async (project, next) => {
     const id = project._id?.$oid || project._id;
     if (!id) return;
-    if (!window.confirm(`Mark "${project.name}" as complete?`)) return;
 
     try {
       const res = await fetch(`${API_BASE}/projects/${id}`, {
         method: "PATCH",
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "complete", progress: 100 }),
+        headers: {
+          "Content-Type": "application/json",
+          ...getActorHeaders(), // optional; helps backend show actor in admin notifications
+        },
+        body: JSON.stringify({ confirm: next ? 1 : 0 }),
       });
       if (!res.ok) {
         const t = await res.text().catch(() => "");
-        alert(`Failed to complete: ${res.status} ${t}`);
+        alert(`Failed to ${next ? "confirm" : "unconfirm"}: ${res.status} ${t}`);
         return;
       }
       setItems((prev) =>
-        prev.map((p) => ((p._id?.$oid || p._id) === id ? { ...p, status: "complete", progress: 100 } : p))
+        prev.map((p) =>
+          (p._id?.$oid || p._id) === id ? { ...p, confirm: next ? 1 : 0 } : p
+        )
       );
     } catch (e) {
-      alert(`Failed to complete: ${e.message}`);
+      alert(`Failed to ${next ? "confirm" : "unconfirm"}: ${e.message}`);
     }
   };
 
-  // Navigate to edit page
   const goEdit = (project) => {
     const id = project._id?.$oid || project._id;
     if (!id) return;
     navigate(`/project-create?projectId=${encodeURIComponent(id)}`);
   };
 
-  // DELETE project
   const deleteProject = async (project) => {
     const id = project._id?.$oid || project._id;
     if (!id) return;
@@ -282,6 +267,7 @@ function AllProjects({ forUserId }) {
       const res = await fetch(`${API_BASE}/projects/${id}`, {
         method: "DELETE",
         credentials: "include",
+        headers: getActorHeaders(),
       });
       if (!res.ok) {
         const t = await res.text().catch(() => "");
@@ -294,7 +280,6 @@ function AllProjects({ forUserId }) {
     }
   };
 
-  // Resolve members for each project (SILENT if /users is missing)
   const resolveProjectMembers = async (projects) => {
     const idSet = new Set();
     if (ENABLE_USER_LOOKUP) {
@@ -311,7 +296,6 @@ function AllProjects({ forUserId }) {
     }
 
     const profiles = idSet.size > 0 ? await fetchMembersByIds(Array.from(idSet)) : [];
-
     const byId = new Map(
       profiles.map((u) => [
         String(u._id?.$oid || u._id || ""),
@@ -371,16 +355,13 @@ function AllProjects({ forUserId }) {
         if (!mounted) return;
         setItems(withMembers);
       } catch (e) {
-        // keep UI quiet
         setError(null);
       } finally {
         if (mounted) setLoading(false);
       }
     })();
 
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [forUserId]);
 
   const empty = !loading && !error && items.length === 0;
@@ -410,7 +391,7 @@ function AllProjects({ forUserId }) {
             <div key={p._id?.$oid || p._id || p.name} className="relative">
               <ProjectCard
                 project={p}
-                onComplete={completeProject}
+                onToggleConfirm={toggleConfirm}
                 onEdit={goEdit}
                 onDelete={deleteProject}
               />
