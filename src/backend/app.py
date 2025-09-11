@@ -917,7 +917,8 @@ def recompute_and_store_project_progress(project_oid):
     # 3) Persist the new progress
     projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.now(timezone.utc)
 }})
-
+    payload = {"project_id": str(pid), "progress": new_pct}
+    socketio.emit("project:progress", payload, namespace="/rt", to=str(pid))
     # 4) Actor (from headers/body) for exclusion in notifications
     try:
         actor_id, actor_name = _actor_from_request(request.get_json(silent=True) or {})

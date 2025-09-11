@@ -27,16 +27,25 @@ export default function useRealtime(projectId, handlers = {}) {
     if (handlers.onUpdated) socket.on("task:updated", handlers.onUpdated);
     if (handlers.onDeleted) socket.on("task:deleted", handlers.onDeleted);
 
+   
+
+if (handlers.onProjectProgress) {
+      socket.on("project:progress", handlers.onProjectProgress);
+    }
+    if (handlers.onAdminProjectProgress) {
+      socket.on("admin:project_progress", handlers.onAdminProjectProgress);
+    }
+
     return () => {
       if (projectId) socket.emit("leave", { projectId });
       socket.off("task:created");
       socket.off("task:updated");
       socket.off("task:deleted");
+      socket.off("project:progress");
+      socket.off("admin:project_progress");
       socket.disconnect();
     };
   }, [projectId]);
-
-
 
   
   return sockRef; // so the page can join extra project rooms if needed
