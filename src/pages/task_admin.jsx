@@ -17,10 +17,58 @@ const percentFromStatus = (status = "") => {
   const n = m ? Number(m[1]) : 0;
   return Math.max(0, Math.min(100, isNaN(n) ? 0 : n));
 };
-const initials = (name = "", email = "") => {
+/** 1-letter fallback */
+const initial1 = (name = "", email = "") => {
   const src = (name || "").trim() || (email || "").trim();
   return src ? src[0].toUpperCase() : "?";
 };
+
+const joinUrl = (a = "", b = "") =>
+  `${String(a).replace(/\/+$/, "")}/${String(b).replace(/^\/+/, "")}`;
+
+/** robust image URL builder */
+const buildImageUrl = (v) => {
+  if (!v) return null;                  // return null (not "")
+  const s = String(v).trim();
+  if (!s) return null;
+
+  // Absolute URL
+  if (/^https?:\/\//i.test(s)) return s;
+
+  // Starts with /uploads/ -> API_BASE + path
+  if (s.startsWith("/uploads/")) return joinUrl(API_BASE, s);
+
+  // Starts with uploads/ (missing leading slash) -> fix to /uploads/...
+  if (/^uploads\//i.test(s)) return joinUrl(API_BASE, `/${s}`);
+
+  // Bare filename like avatar.jpg -> /uploads/avatar.jpg
+  if (!s.startsWith("/") && /\.(png|jpe?g|gif|webp|avif)$/i.test(s)) {
+    return joinUrl(API_BASE, `/uploads/${s}`);
+  }
+
+  // Otherwise treat as public asset path or custom path
+  return s;
+};
+
+const addBust = (url, bustKey) => {
+  if (!url) return null;
+  if (!bustKey) return url;
+  return url + (url.includes("?") ? "&" : "?") + `t=${encodeURIComponent(bustKey)}`;
+};
+
+/** choose best candidate field for a member image */
+const bestMemberImage = (m) => {
+  const candidates = [
+    m?.profileImage,
+    m?.profileImageUrl,
+    m?.picture,
+    m?.profile?.photo,
+    m?.avatar_url,
+    m?.avatar,
+  ].filter(Boolean);
+  return candidates[0] || "";
+};
+
 const generateColors = (count) => {
   if (!count) return [];
   const colors = [];
@@ -177,9 +225,38 @@ const TaskAdmin = () => {
 
         if (cancelled) return;
 
-        const m = { ...membersById };
-        (proj.members || []).forEach(mm => { m[mm._id] = { ...(m[mm._id] || {}), ...mm }; });
-        setMembersById(m);
+        // ⚙️ Enrich project members with an _img like Task.jsx
+        const baseMembers = {};
+        const missingImgIds = [];
+        (proj.members || []).forEach((mm) => {
+          const id = typeof mm?._id === "object" ? mm._id?.$oid : mm?._id;
+          const candidate = bestMemberImage(mm);
+          baseMembers[id] = { ...mm, _img: buildImageUrl(candidate) };
+          if (!baseMembers[id]._img && id) missingImgIds.push(id);
+        });
+
+        if (missingImgIds.length > 0) {
+          try {
+            const url = new URL(`${API_BASE}/users`);
+            url.searchParams.set("ids", missingImgIds.join(","));
+            const ru = await fetch(url.toString(), { credentials: "include" });
+            const ju = await ru.json().catch(() => []);
+            if (ru.ok && Array.isArray(ju)) {
+              const byId = new Map(
+                ju.map((u) => [
+                  String(typeof u._id === "object" ? u._id.$oid : u._id || u.id),
+                  buildImageUrl(u.profileImage || u.picture || "")
+                ])
+              );
+              missingImgIds.forEach((id) => {
+                const url = byId.get(String(id)) || "";
+                if (url && baseMembers[id]) baseMembers[id]._img = url;
+              });
+            }
+          } catch { /* ignore */ }
+        }
+
+        setMembersById(baseMembers);
 
         const list = Array.isArray(raw) ? raw : (Array.isArray(raw?.tasks) ? raw.tasks : []);
         setProjectTasks(list);
@@ -240,27 +317,37 @@ const TaskAdmin = () => {
   const [mtError, setMtError] = useState("");
 
   // all members across projects
-  const allMemberIds = useMemo(() => {
+const currentMemberIds = useMemo(() => {
     const s = new Set();
-    projects.forEach(p => {
-      if (p.leader_id) s.add(p.leader_id);
-      (p.member_ids || []).forEach(id => s.add(id));
-    });
+    if (selectedProject) {
+      if (selectedProject.leader_id) s.add(String(selectedProject.leader_id));
+      (selectedProject.member_ids || []).forEach((id) => id && s.add(String(id)));
+    }
     return [...s];
-  }, [projects]);
+  }, [selectedProject]);
 
-  const memberOptions = useMemo(() => {
-    return allMemberIds
-      .map(id => membersById[id]
-        ? { _id: id, name: membersById[id].name, email: membersById[id].email, picture: membersById[id].picture }
-        : { _id: id }
-      )
-      .sort((a,b) => (a.name||a.email||"").localeCompare(b.name||b.email||""));
-  }, [allMemberIds, membersById]);
+const memberOptions = useMemo(() => {
+    return currentMemberIds
+      .map((id) => {
+        const m = membersById[id] || {};
+        return {
+          _id: id,
+          name: m.name || "",
+          email: m.email || "",
+          picture: m.picture || m._img || "",
+        };
+      })
+      .sort((a, b) => (a.name || a.email || "").localeCompare(b.name || b.email || ""));
+  }, [currentMemberIds, membersById]);
 
-  useEffect(() => {
-    if (!selectedMemberId && memberOptions.length) setSelectedMemberId(memberOptions[0]._id);
-  }, [memberOptions, selectedMemberId]);
+useEffect(() => {
+    if (!memberOptions.length) {
+      setSelectedMemberId("");
+      return;
+    }
+    const stillValid = memberOptions.some((m) => m._id === selectedMemberId);
+    if (!stillValid) setSelectedMemberId(memberOptions[0]._id);
+  }, [selectedProjectId, memberOptions, selectedMemberId]);
 
   useEffect(() => {
     if (!selectedMemberId) return;
@@ -291,7 +378,7 @@ const TaskAdmin = () => {
   const filteredTasks = listFilter === "complete" ? completeTasks : progressTasks;
 
   const selMember = selectedMemberId ? membersById[selectedMemberId] || {} : {};
-  const memberInitial = initials(selMember.name, selMember.email);
+  const memberInitial = initial1(selMember.name, selMember.email);
 
   // Calendar state (all projects deadlines)
   const [calMonth, setCalMonth] = useState(() => new Date());
@@ -411,8 +498,8 @@ const TaskAdmin = () => {
               <div className="space-y-4">
                 {projectTasks.map((t) => {
                   const m = membersById[t.assignee_id] || {};
-                  const pic = m.avatar || m.picture || m.profile?.photo || "";
-                  const letter = initials(m.name, m.email);
+                  const pic = m?._img || "";
+                  const letter = initial1(m?.name, m?.email);
                   const pct = percentFromStatus(t.status);
                   const isDone = pct === 100;
 
@@ -427,8 +514,26 @@ const TaskAdmin = () => {
                           transition: "width 220ms ease",
                         }}
                       >
+                        {/* avatar/initial */}
                         <div className="w-8 h-8 rounded-full overflow-hidden bg-white/20 flex items-center justify-center ring-2 ring-white/40">
-                          {pic ? <img src={pic} alt="" className="w-full h-full object-cover" /> : <span className="text-sm font-bold">{letter}</span>}
+                          {pic ? (
+                            <img
+                              src={pic}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.style.display = "none";
+                                const sibling = e.currentTarget.nextElementSibling;
+                                if (sibling) sibling.style.display = "flex";
+                              }}
+                            />
+                          ) : null}
+                          <span
+                            className="text-sm font-bold"
+                            style={{ display: pic ? "none" : "flex" }}
+                          >
+                            {letter}
+                          </span>
                         </div>
 
                         <div className="min-w-0">
@@ -465,13 +570,7 @@ const TaskAdmin = () => {
               style={{ borderColor: customColor }}
             >
               <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center">
-                  {selMember?.picture
-                    ? <img src={selMember.picture} alt="avatar" className="w-full h-full object-cover" />
-                    : <span className="text-sm font-bold text-gray-700">
-                        {initials(selMember?.name, selMember?.email)}
-                      </span>}
-                </div>
+            
                 <div className="text-left">
                   <div className="font-semibold">
                     {selMember?.name || "Select member"}
@@ -501,13 +600,7 @@ const TaskAdmin = () => {
                           setOpenMemberDD(false);
                         }}
                       >
-                        <div className="w-8 h-8 rounded-full bg-gray-200 overflow-hidden flex items-center justify-center">
-                          {m.picture
-                            ? <img src={m.picture} alt="" className="w-full h-full object-cover" />
-                            : <span className="text-xs font-bold text-gray-700">
-                                {initials(m.name, m.email)}
-                              </span>}
-                        </div>
+                   
                         <div className="min-w-0">
                           <div className="text-sm font-medium truncate">
                             {m.name || m.email || m._id}

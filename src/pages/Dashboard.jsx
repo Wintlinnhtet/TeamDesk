@@ -4,29 +4,37 @@ import { useNavigate } from "react-router-dom";
 import { API_BASE } from "../config";
 import { getCurrentUser } from "../auth";
 
-// 🔔 add these
 import NotificationBell from "../components/NotificationBell";
 import Notifications from "../components/Notifications";
 
 const DONE = new Set(["done", "complete", "completed", "finished"]);
+
+// helper: build full url when picture starts with /uploads/
+const buildImageUrl = (v) => {
+  if (!v) return "";
+  if (/^https?:\/\//i.test(v)) return v;
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`;
+  // handle plain filename stored earlier like "cat2.jpg"
+  if (!v.startsWith("/") && v.match(/\.(png|jpe?g|gif|webp|avif)$/i)) {
+    return `${API_BASE}/uploads/${v}`;
+  }
+  return v;
+};
 
 const Dashboard = () => {
   const customColor = "#AA405B";
   const navigate = useNavigate();
   const user = getCurrentUser(); // {_id, name, email, role, ...}
 
-  // 🔔 state for notifications panel
   const [notifOpen, setNotifOpen] = useState(false);
-  // force a rerender of the bell to refresh count after we mark-all-read
   const [bellKey, setBellKey] = useState(0);
 
   const [batchmates, setBatchmates] = useState([]);
-  const [experience, setExperience] = useState([]);  // from user doc (string or array)
-  const [projects, setProjects] = useState([]);      // projects for this user
-  const [tasks, setTasks] = useState([]);            // OPEN tasks for this user (not complete)
+  const [experience, setExperience] = useState([]);
+  const [projects, setProjects] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [msg, setMsg] = useState("");
 
-  // 🔔 mark all read when panel opens (so the red number clears)
   const markAllRead = async () => {
     if (!user?._id) return;
     try {
@@ -36,24 +44,21 @@ const Dashboard = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ for_user: user._id }),
       });
-      // nudge the bell to refresh its unread_count polling immediately
       setBellKey((k) => k + 1);
-    } catch {
-      // ignore — the bell will clear on its next poll anyway
-    }
+    } catch {}
   };
 
-  const initials = (name = "") =>
-    name.trim().split(/\s+/).map((s) => s[0]).slice(0, 2).join("").toUpperCase();
+  const initials = (name = "") => {
+    const first = (name || "").trim().split(/\s+/)[0] || "";
+    return (first[0] || "?").toUpperCase();
+  };
 
-  // 1) Fast lookup: projectId -> project
   const projectsById = useMemo(() => {
     const map = {};
     for (const p of projects) map[p._id] = p;
     return map;
   }, [projects]);
 
-  // Only NOT-complete tasks, sorted by start date; show project name
   const upcomingWithProject = useMemo(() => {
     const withDates = (tasks || [])
       .map((t) => ({ ...t, startMs: t.start_at ? Date.parse(t.start_at) : Infinity }))
@@ -64,13 +69,20 @@ const Dashboard = () => {
       projectName: projectsById[t.project_id]?.name || "Untitled project",
     }));
   }, [tasks, projectsById]);
-
-  // (Optional) show today's date in the header
+ const normId = (x) => {
+   if (!x) return null;
+   if (typeof x === "object") {
+     // cases: {_id: ...}, {$oid: "..."}
+     if (x.$oid) return String(x.$oid);
+     if (x._id)  return normId(x._id);
+     return null;
+   }
+   try { return String(x); } catch { return null; }
+ };
   const today = new Date();
   const monthLabel = today.toLocaleString("en-US", { month: "long" });
   const dayLabel = `${today.getDate()}, ${today.toLocaleString("en-US", { weekday: "short" })}`;
 
-  // Normalize experience (can be array or JSON string from backend)
   const normalizedExperienceAll = useMemo(() => {
     if (Array.isArray(experience)) return experience;
     if (typeof experience === "string") {
@@ -84,7 +96,6 @@ const Dashboard = () => {
     return [];
   }, [experience]);
 
-  // Filter experience to only projects with confirm:1 (match by project name)
   const confirmedExperience = useMemo(() => {
     if (!projects?.length) return [];
     const confirmedNames = new Set(
@@ -99,14 +110,12 @@ const Dashboard = () => {
     });
   }, [projects, normalizedExperienceAll]);
 
-  // Fetch OPEN tasks only (todo + in_progress). Fallback: all then filter.
   const loadOpenTasksForUser = async (uid) => {
     try {
       const [rtodo, rprog] = await Promise.all([
         fetch(`${API_BASE}/tasks?assignee_id=${uid}&status=todo`),
         fetch(`${API_BASE}/tasks?assignee_id=${uid}&status=in_progress`)
       ]);
-
       let list = [];
       if (rtodo.ok) {
         const a = await rtodo.json().catch(() => []);
@@ -116,7 +125,6 @@ const Dashboard = () => {
         const b = await rprog.json().catch(() => []);
         if (Array.isArray(b)) list.push(...b);
       }
-
       if (list.length > 0) {
         const seen = new Set();
         const openOnly = [];
@@ -129,7 +137,6 @@ const Dashboard = () => {
         setTasks(openOnly);
         return;
       }
-
       const rf = await fetch(`${API_BASE}/tasks?assignee_id=${uid}`);
       const df = await rf.json();
       const all = Array.isArray(df) ? df : [];
@@ -142,7 +149,7 @@ const Dashboard = () => {
     }
   };
 
-  // Load user details (experience), projects, and OPEN tasks
+  // Load user details, projects, tasks
   useEffect(() => {
     if (!user?._id) {
       setMsg("Please sign in again.");
@@ -150,19 +157,16 @@ const Dashboard = () => {
     }
     (async () => {
       try {
-        // 1) User doc (experience)
         const uRes = await fetch(`${API_BASE}/get-user/${user._id}`);
         const uData = await uRes.json();
         if (uRes.ok) setExperience(uData.experience ?? []);
         else console.warn("get-user failed:", uData);
 
-        // 2) Projects (for confirm:1 filtering + leader detection)
         const pRes = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
         const pData = await pRes.json();
         if (pRes.ok) setProjects(Array.isArray(pData) ? pData : []);
         else console.warn("projects failed:", pData);
 
-        // 3) OPEN tasks assigned to me
         await loadOpenTasksForUser(user._id);
       } catch (e) {
         console.error(e);
@@ -172,24 +176,7 @@ const Dashboard = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?._id]);
 
-  // Derive "my role" per project (kept for future use if you show roles anywhere)
-  const roleByProject = useMemo(() => {
-    const map = {};
-    for (const t of tasks) {
-      if (t.project_role && !map[t.project_id]) {
-        map[t.project_id] = t.project_role;
-      }
-    }
-    for (const p of projects) {
-      const pid = p._id;
-      if (!map[pid]) {
-        map[pid] = p.leader_id === user?._id ? "Leader" : (user?.position || "Member");
-      }
-    }
-    return map;
-  }, [tasks, projects, user?._id, user?.position]);
-
-  // Batchmates from all my projects (unique, exclude me)
+  // Batchmates: fetch full user docs to get profileImage/picture
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -198,29 +185,57 @@ const Dashboard = () => {
           if (!cancelled) setBatchmates([]);
           return;
         }
-        const allMembersArrays = await Promise.all(
+
+        // Load each project's members to gather all unique member IDs
+        const memberIds = new Set();
+        await Promise.all(
           projects.map(async (p) => {
             const r = await fetch(`${API_BASE}/projects/${p._id}`);
             const d = await r.json();
             if (!r.ok) throw new Error(d.error || `Failed ${r.status}`);
-            return Array.isArray(d.members) ? d.members : [];
+            const arr = Array.isArray(d.members) ? d.members : [];
+            for (const m of arr) {
+              const mid = normId(m?._id) || normId(m?.id);
+             const selfId = normId(user?._id);
+             if (!mid || (selfId && mid === selfId)) continue;
+             memberIds.add(mid);
+            }
           })
         );
-        const uniq = new Map();
-        for (const arr of allMembersArrays) {
-          for (const m of arr) {
-            if (!m?._id || m._id === user?._id) continue;
-            if (!uniq.has(m._id)) {
-              uniq.set(m._id, {
-                _id: m._id,
-                name: m.name || m.email || "Member",
-                title: m.position || "Member",
-                img: m.avatar || null,
-              });
-            }
-          }
+
+        if (memberIds.size === 0) {
+          if (!cancelled) setBatchmates([]);
+          return;
         }
-        if (!cancelled) setBatchmates([...uniq.values()]);
+
+        // ✅ Fetch their pictures (now includes profileImage from backend)
+        const url = new URL(`${API_BASE}/users`);
+        url.searchParams.set("ids", Array.from(memberIds).join(","));
+        const res = await fetch(url.toString(), { credentials: "include" });
+        const json = await res.json().catch(() => []);
+        const list = Array.isArray(json) ? json : [];
+
+        // Map _id -> { name, title?, img }
+        const byId = new Map();
+       for (const u of list) {
+         const id = normId(u._id);
+         if (!id) continue;
+         byId.set(id, {
+           _id: id,
+           name: u.name || u.email || "Member",
+           title: "Member",
+           img: buildImageUrl(u.picture || ""),
+         });
+       }
+
+        // Build final unique list in a stable order
+        const out = Array.from(memberIds).map((id) => {
+         const m = byId.get(id);
+         return m || { _id: id, name: "Member", title: "Member", img: "" };
+       });
+
+
+        if (!cancelled) setBatchmates(out);
       } catch (e) {
         console.error("batchmates load failed:", e);
         if (!cancelled) setBatchmates([]);
@@ -229,7 +244,30 @@ const Dashboard = () => {
     return () => {
       cancelled = true;
     };
-  }, [projects, user?._id, API_BASE]);
+  }, [projects, user?._id]);
+useEffect(() => {
+  const key = `deadlineScanLastRun:${user?._id || 'anon'}`;
+  const last = Number(localStorage.getItem(key) || 0);
+  const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+
+  // DEV: allow Ctrl/Cmd+Shift+R to re-run immediately by ignoring the cache (optional)
+  const skipCache = false; // set true while testing
+
+  if (!skipCache && Date.now() - last < TWELVE_HOURS) return;
+
+  (async () => {
+    try {
+      await fetch(`${API_BASE}/notifications/run_deadline_scan`, {
+        method: "POST",
+        credentials: "include",                 // ← add; keeps CORS happy
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ days: 7, lookback_hours: 12 })
+      });
+    } catch {}
+    localStorage.setItem(key, String(Date.now()));
+  })();
+}, [user?._id]);
+
 
   return (
     <div className="ml-5 w-full">
@@ -244,7 +282,7 @@ const Dashboard = () => {
           </p>
         </div>
 
-        {/* 🔔 Bell + panel */}
+        {/* Bell + panel */}
         <div className="flex items-center justify-end gap-2 mb-2 mr-4 relative">
           <NotificationBell
             key={bellKey}
@@ -267,7 +305,6 @@ const Dashboard = () => {
       <div className="flex">
         {/* LEFT COLUMN */}
         <div className="flex flex-col w-3/4 space-y-4 mr-3">
-          {/* Today Task Card */}
           <div className="mt-3 shadow-md p-4 rounded-lg flex items-center h-50 bg-white">
             <div className="flex-1">
               <h2 className="text-xl font-bold" style={{ color: customColor }}>Today Task</h2>
@@ -285,7 +322,7 @@ const Dashboard = () => {
             </div>
           </div>
 
-          {/* Previous Experience — FILTERED by confirm:1 */}
+          {/* Previous Experience (filtered) */}
           <div className="flex w-full space-x-4 mt-6">
             <div className="w-1/2 bg-white p-4 rounded-xl shadow-md relative">
               <h2 className="text-lg font-semibold text-gray-800 mb-4 ml-8">Previous Experience</h2>
@@ -407,7 +444,12 @@ const Dashboard = () => {
               batchmates.slice(0, 6).map((mate) => (
                 <div key={mate._id} className="flex items-center bg-white rounded-lg p-2 mb-2">
                   {mate.img ? (
-                    <img src={mate.img} alt={mate.name} className="w-10 h-10 rounded-full object-cover" />
+                    <img
+                      src={mate.img}
+                      alt={mate.name}
+                      className="w-10 h-10 rounded-full object-cover"
+                      onError={(e) => { e.currentTarget.src = ""; }}
+                    />
                   ) : (
                     <div
                       className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
@@ -426,12 +468,7 @@ const Dashboard = () => {
                 </div>
               ))
             )}
-            <button
-              className="bg-white w-full text-sm font-medium py-1 mt-2 rounded-lg shadow hover:bg-gray-100"
-              onClick={() => navigate("/team")}
-            >
-              See all
-            </button>
+            
           </div>
         </div>
       </div>
