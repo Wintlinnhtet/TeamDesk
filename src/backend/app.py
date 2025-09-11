@@ -46,7 +46,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "172.20.1.227"
+SERVER_IP = "192.168.1.8"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",

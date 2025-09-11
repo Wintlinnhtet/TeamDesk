@@ -152,14 +152,17 @@ const Dashboard = () => {
   // Load user details, projects, tasks
   useEffect(() => {
     if (!user?._id) {
-      setMsg("Please sign in again.");
+      
       return;
     }
     (async () => {
       try {
         const uRes = await fetch(`${API_BASE}/get-user/${user._id}`);
         const uData = await uRes.json();
-        if (uRes.ok) setExperience(uData.experience ?? []);
+        if (uRes.ok) 
+          {setExperience(uData.experience ?? []);
+          localStorage.setItem("user", JSON.stringify(uData));
+          sessionStorage.setItem("user", JSON.stringify(uData));}
         else console.warn("get-user failed:", uData);
 
         const pRes = await fetch(`${API_BASE}/projects?for_user=${user._id}`);
@@ -222,7 +225,7 @@ const Dashboard = () => {
          if (!id) continue;
          byId.set(id, {
            _id: id,
-           name: u.name || u.email || "Member",
+           name: u.name ,
            title: "Member",
            img: buildImageUrl(u.picture || ""),
          });
@@ -275,7 +278,7 @@ useEffect(() => {
       <div className="mt-2 mb-2 flex items-start justify-between">
         <div>
           <h1 className="text-xl font-semibold text-black">
-            Hello {user?.name || user?.email || ""}
+            Hello {user?.name }
           </h1>
           <p className="text-sm" style={{ color: customColor }}>
             Let's finish your task today!
@@ -387,7 +390,7 @@ useEffect(() => {
         <div className="flex flex-col w-1/4 space-y-4 mr-10">
           <div className="p-3 rounded-lg" style={{ backgroundColor: customColor }}>
             <h2 className="text-xl font-bold text-white">
-              {user?.name || user?.email || "User"}
+              {user?.name }
             </h2>
             <p className="text-white">{user?.role || "Member"}</p>
 
