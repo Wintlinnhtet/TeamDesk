@@ -3,199 +3,50 @@ from flask_cors import CORS
 from backend.database import db
 from werkzeug.security import generate_password_hash, check_password_hash
 from bson import ObjectId
-from datetime import datetime
+# at the top of app.py
+from datetime import datetime, timedelta, timezone
+
 import json
 from flask_socketio import emit, join_room, leave_room
 import re
 from werkzeug.utils import secure_filename
-import os
+import os, time
 from backend.extensions import socketio
-from backend.profile_backend import profile_bp
-import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, timedelta ,timezone
-from fastapi import FastAPI
-from dateutil.parser import isoparse
+
 # near other imports
 
 from bson import ObjectId
 # --- add at the very top of app.py ---
 import os, sys
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # .../src/backend
-PARENT_DIR = os.path.dirname(BASE_DIR)                     # .../src
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) 
+
+PARENT_DIR = os.path.dirname(BASE_DIR) 
+
+     
+# --- uploads config (ONE place only) ---
+
+
+
 if PARENT_DIR not in sys.path:
+
     sys.path.insert(0, PARENT_DIR)
 
 
 from backend.notifications import bp_notifications
 from backend.notifier import notify_admins, notify_users
-from backend.database import get_db
-from backend.file_sharing import file_sharing_bp
-proj_col=get_db()["projects"]
-noti_col=get_db()["notifications"]
-users_col=get_db()["users"]
 
-#    sender_email = "yephay123@gmail.com"
-#     sender_password = "rebwdogkklzbvpeh"
+from backend.database import get_db
+
+
+from backend.file_sharing import file_sharing_bp
+
 
 app = Flask(__name__)
 CORS(app)  # Your existing CORS setup //y2
 
-app.register_blueprint(profile_bp)
+
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-
-
-# Sending Email
-
-def send_welcome_email(email, position):
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    sender_email = os.getenv("SMTP_EMAIL", "yephay123@gmail.com")
-    sender_password = os.getenv("SMTP_PASSWORD", "rebwdogkklzbvpeh")
-
-    message = MIMEMultipart("alternative")
-    message["Subject"] = f"Welcome to Our Team - {position} Position"
-    message["From"] = sender_email
-    message["To"] = email
-
-    html = f"""
-    <html>
-    <body>
-        <h2>Welcome to Our Team!</h2>
-        <p>We're excited to have you join us as a <strong>{position}</strong>.</p>
-        <p>Your account has been successfully created with email: {email}</p>
-        <p>We'll be in touch soon with more details about your onboarding process.</p>
-        <br>
-        <p>Best regards,<br>Your Team</p>
-    </body>
-    </html>
-    """
-    message.attach(MIMEText(html, "html"))
-
-    try:
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, email, message.as_string())
-        print(f"✅ Welcome email sent to {email}")
-    except Exception as e:
-        print(f"❌ Failed to send welcome email to {email}: {e}")
-
-@app.route('/add-member', methods=['POST'])
-def add_newmember():
-    data = request.get_json()
-    email = data['email']
-    position = data['position']
-    send_welcome_email(email, position)
-    return jsonify({"message": "Member added successfully"})
-
-
-#///////////////////////////////////
-# =====================
-# 2. DEADLINE REMINDERS
-# =====================
-def send_deadline_email(to_email, project_name, deadline):
-    smtp_server = "smtp.gmail.com"
-    smtp_port = 587
-    sender_email = os.getenv("SMTP_EMAIL", "yephay123@gmail.com")
-    sender_password = os.getenv("SMTP_PASSWORD", "rebwdogkklzbvpeh")
-
-    message = MIMEMultipart("alternative")
-    message["Subject"] = f"Reminder: {project_name} deadline in 7 days"
-    message["From"] = sender_email
-    message["To"] = to_email
-
-    html = f"""
-    <html>
-    <body>
-        <h2>⏰ Project Deadline Reminder</h2>
-        <p>Hello,</p>
-        <p>The project <b>{project_name}</b> is due on <b>{deadline}</b> (7 days from today).</p>
-        <p>Please make sure all tasks are on track!</p>
-        <br>
-        <p>Best regards,<br>Project Manager</p>
-    </body>
-    </html>
-    """
-    message.attach(MIMEText(html, "html"))
-
-    try:
-        with smtplib.SMTP(smtp_server, smtp_port) as server:
-            server.starttls()
-            server.login(sender_email, sender_password)
-            server.sendmail(sender_email, to_email, message.as_string())
-        print(f"✅ Deadline reminder sent to {to_email}")
-    except Exception as e:
-        print(f"❌ Failed to send deadline reminder: {e}")
-
-
-
-
-def check_deadlines():
-    now_utc = datetime.now(timezone.utc)
-    within_start = now_utc
-    within_end = now_utc + timedelta(days=7, hours=23, minutes=59, seconds=59)
-    exact_start = now_utc + timedelta(days=7)
-    exact_end = exact_start + timedelta(days=1) - timedelta(seconds=1)
-
-    for project in proj_col.find():
-        end_at = project.get("end_at")
-        try:
-            if isinstance(end_at, str):
-                end_at = isoparse(end_at)
-        except ValueError:
-            print(f"❌ Invalid end_at for project {project.get('name')}: {end_at}")
-            continue
-
-        if end_at < now_utc:
-            continue  # skip past deadlines
-        if project.get("status") == "complete":
-            continue  # skip completed projects
-
-        # Determine reminder type
-        if exact_start <= end_at <= exact_end:
-            reminder_type = "exactly 7 days"
-        elif within_start <= end_at <= within_end:
-            reminder_type = "within 7 days"
-        else:
-            continue  # skip if not in either window
-
-        project_name = project.get("name")
-        project_deadline_str = end_at.strftime("%Y-%m-%d %H:%M UTC")
-        project_id = str(project.get("_id"))
-        member_ids = project.get("member_ids", [])
-
-        for member_id in member_ids:
-            user = users_col.find_one({"_id": ObjectId(member_id), "email": {"$exists": True}})
-            if not user:
-                continue
-            member_email = user["email"]
-
-            send_deadline_email(member_email, project_name, project_deadline_str)
-            print(f"📧 Reminder ({reminder_type}) sent to {member_email} for project '{project_name}'")
-
-            noti_col.insert_one({
-                "project_id": project_id,
-                "member_id": member_id,
-                "email": member_email,
-                "sent_at": datetime.utcnow(),
-                "message": f"Deadline reminder ({reminder_type}) for project '{project_name}'"
-            })
-
-
-# =====================
-# 3. SCHEDULER
-# =====================
-scheduler = BackgroundScheduler()
-scheduler.add_job(check_deadlines, "cron", hour=9, minute=0)  # Daily at 09:00 UTC
-scheduler.start()
-print("✅ Scheduler started - deadline reminders active")
-
-
-
-SERVER_IP = "192.168.1.5"
+SERVER_IP = "172.20.1.227"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -204,6 +55,7 @@ FRONTEND_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
     "http://127.0.0.1:5137",
+    f"http://{SERVER_IP}:5137",
     f"http://{SERVER_IP}:5137",
 ]
 
@@ -241,6 +93,7 @@ CORS(
 
 
 
+
 def _preflight_ok():
     origin = request.headers.get("Origin", "")
     h = {
@@ -257,9 +110,39 @@ def _preflight_ok():
     for k, v in h.items():
         resp.headers[k] = v
     return resp
+
+# ❌ REMOVE this old handler:
+# @app.before_request
+# def handle_preflight():
+#     if request.method == "OPTIONS":
+#         return app.make_response(("", 204))
+
+# ✅ Keep a single catch for OPTIONS (you already have some; this one is a safety net)
+@app.route("/", defaults={"path": ""}, methods=["OPTIONS"])
+@app.route("/<path:path>", methods=["OPTIONS"])
+def catch_all_options(path):
+    return _preflight_ok()
+
 # where you create the app and register blueprints
 app.register_blueprint(bp_notifications, url_prefix="/notifications")
+def _iso_utc(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    # RFC3339-like with trailing Z
+    return dt.isoformat().replace("+00:00", "Z")
 
+def _jsonable(value):
+    if isinstance(value, datetime):
+        return _iso_utc(value)
+    if isinstance(value, ObjectId):
+        return str(value)
+    if isinstance(value, list):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _jsonable(v) for k, v in value.items()}
+    return value
 # --- explicit preflights ---
 @app.route("/projects", methods=["OPTIONS"])
 def options_projects():
@@ -280,7 +163,9 @@ def options_task_detail(task_id):
 @app.route("/members", methods=["OPTIONS"])
 def options_members():
     return _preflight_ok()
-
+@app.route("/notifications/run_deadline_scan", methods=["OPTIONS"])
+def options_deadline_scan():
+    return _preflight_ok()
 # --- collections ---
 users_collection = db["users"]
 projects_collection = db["projects"]
@@ -288,6 +173,146 @@ tasks_collection   = db["tasks"]
 announcement_collection = db["announcement"]
 notifications_collection = db.get_collection("notifications")
 
+def get_request_user_oid():
+    uid = request.headers.get("X-User-Id") or request.args.get("user_id")
+    if not uid:
+        data = request.get_json(silent=True) or {}
+        uid = data.get("user_id")
+    return to_object_id(uid) if uid else None
+
+def _public_user_doc(u):
+    img = (u.get("profileImage") or "").strip() 
+    return {
+        "id": str(u["_id"]),
+        "name": u.get("name", ""),
+        "position": u.get("position", ""),
+        "email": u.get("email", ""),
+        "address": u.get("address", ""),
+        "phone": u.get("phone", ""),
+        "profileImage": img,
+    }
+
+@app.route("/api/profile", methods=["GET", "PUT"])
+def api_profile():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    # 1) Read the user first (avoid UnboundLocalError)
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    # 2) If profileImage is missing, set a default once and reflect it in the response
+   
+    if request.method == "GET":
+        return jsonify(_public_user_doc(u)), 200
+
+    # PUT: update non-password fields only
+    data = request.get_json() or {}
+    updates = {}
+    for key in ["name", "position", "email", "address", "phone"]:
+        if key in data:
+            updates[key] = (data.get(key) or "").strip()
+
+    if not updates:
+        return jsonify({"error": "No changes"}), 400
+
+    updates["updated_at"] = datetime.now(timezone.utc)
+
+    users_collection.update_one({"_id": uid}, {"$set": updates})
+    u2 = users_collection.find_one({"_id": uid})
+    return jsonify({"ok": True, "user": _public_user_doc(u2)}), 200
+
+@app.route("/api/profile/password", methods=["PUT"])
+def api_profile_password():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    data = request.get_json() or {}
+    current_password = (data.get("current_password") or "").strip()
+    new_password = (data.get("new_password") or "").strip()
+
+    if not current_password or not new_password:
+        return jsonify({"error": "Current and new password are required"}), 400
+
+    # Verify current password
+    stored_hash = u.get("password") or ""
+    try:
+      ok = check_password_hash(stored_hash, current_password)
+    except Exception:
+      ok = False
+    if not ok:
+      return jsonify({"error": "Current password is incorrect"}), 400
+
+    # Update to new password
+    try:
+        new_hash = generate_password_hash(new_password, method="scrypt")
+    except Exception:
+        new_hash = generate_password_hash(new_password, method="pbkdf2:sha256", salt_length=16)
+
+    users_collection.update_one({"_id": uid}, {"$set": {"password": new_hash, "updated_at": datetime.now(timezone.utc)
+}})
+    return jsonify({"ok": True}), 200
+
+
+@app.route("/api/upload-profile-image", methods=["POST"])
+def api_upload_profile_image():
+    uid = get_request_user_oid()
+    if not uid:
+        return jsonify({"error": "Missing user_id"}), 400
+
+    u = users_collection.find_one({"_id": uid})
+    if not u:
+        return jsonify({"error": "User not found"}), 404
+
+    if "profileImage" not in request.files:
+        return jsonify({"error": "No file"}), 400
+
+    f = request.files["profileImage"]
+    if not f or f.filename == "":
+        return jsonify({"error": "Empty filename"}), 400
+
+    filename = secure_filename(f.filename)
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+
+    # remove old file if it was an uploaded file (we don't delete the default cat2.jpg)
+    old = u.get("profileImage") or ""
+    if old.startswith("/uploads/"):
+        try:
+            os.remove(os.path.join(UPLOAD_DIR, os.path.basename(old)))
+        except Exception:
+            pass
+
+    new_name = f"{str(uid)}_{int(time.time())}.{ext}"
+    path = os.path.join(UPLOAD_DIR, new_name)
+    f.save(path)
+
+    image_url = f"/uploads/{new_name}"
+    users_collection.update_one(
+        {"_id": uid},
+        {"$set": {"profileImage": image_url, "updated_at": datetime.now(timezone.utc)
+}}
+    )
+
+    return jsonify({"ok": True, "imageUrl": image_url, "profileImage": image_url}), 200
+# (keep this)
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+os.makedirs(UPLOAD_DIR, exist_ok=True)
+app.config["UPLOAD_FOLDER"] = UPLOAD_DIR
+
+@app.route("/uploads/<path:filename>")
+def serve_upload(filename):
+    return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
+     # .../src/backend
+# If any code elsewhere uses app.config['UPLOAD_FOLDER'], point it here too:
+
+           # .../src
 
 def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     """
@@ -303,7 +328,8 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     # Fallback: insert a notification document for each adminish user.
     admin_roles = ["admin", "owner", "superadmin"]
     admin_ids = [u["_id"] for u in users_collection.find({"role": {"$in": admin_roles}}, {"_id": 1})]
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     base = {
         "type": kind,
         "title": title,
@@ -314,7 +340,7 @@ def _notify_admins(kind: str, title: str, body: str, data: dict | None = None):
     }
     for uid in admin_ids:
         try:
-            notifications_collection.insert_one({**base, "user_id": uid})
+            notifications_collection.insert_one({**base, "for_user": uid})
         except Exception:
             pass
 
@@ -330,7 +356,8 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
     except Exception:
         pass
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     base = {
         "type": kind,
         "title": title,
@@ -345,7 +372,7 @@ def _notify_users(user_ids: list, kind: str, title: str, body: str, data: dict |
         except Exception:
             continue
         try:
-            notifications_collection.insert_one({**base, "user_id": uid_obj})
+            notifications_collection.insert_one({**base, "for_user": uid_obj})
         except Exception:
             pass
 
@@ -391,7 +418,18 @@ def handle_preflight():
 
 @app.after_request
 def add_cors_headers(resp):
-    resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
+    origin = request.headers.get("Origin", "")
+    if origin in FRONTEND_ORIGINS:
+        # reflect only known origins
+        resp.headers.setdefault("Access-Control-Allow-Origin", origin)
+        resp.headers.setdefault("Vary", "Origin")
+        resp.headers.setdefault("Access-Control-Allow-Credentials", "true")
+    # keep these fallbacks
+    req_acrh = request.headers.get("Access-Control-Request-Headers", "")
+    if req_acrh:
+        resp.headers.setdefault("Access-Control-Allow-Headers", req_acrh)
+    else:
+        resp.headers.setdefault("Access-Control-Allow-Headers", "Content-Type, Authorization")
     resp.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
     return resp
 
@@ -555,7 +593,8 @@ def _write_member_experience_for_confirmed_project(pid: ObjectId):
     except Exception:
         return  # best-effort
 
-    when = datetime.utcnow()
+    when = datetime.now(timezone.utc)
+
     for uid, roles in roles_by_user.items():
         # Only write if the user actually has at least one role
         if not roles:
@@ -612,51 +651,6 @@ def add_member():
     return jsonify({"message": "Member added successfully!"}), 201
 
 # -------------------- register USER --------------------
-# @app.patch("/update-user/<user_id>")
-# def update_user(user_id):
-#     data = request.get_json() or {}
-#     name = data.get("name")
-#     dob = data.get("dob")
-#     phone = data.get("phone")
-#     address = data.get("address")
-#     password = data.get("password")
-
-#     if not name or not dob or not phone or not address or not password:
-#         return jsonify({"error": "All fields are required"}), 400
-
-#     hashed_password = generate_password_hash(password)
-#     try:
-#         result = users_collection.update_one(
-#             {"_id": ObjectId(user_id)},
-#             {"$set": {
-#                 "name": name,
-#                 "dob": dob,
-#                 "phone": phone,
-#                 "address": address,
-#                 "password": hashed_password,
-#                 "alreadyRegister": True  # 🔥 Highlight: mark user as registered
-#             }}
-#         )
-#         if result.modified_count == 0:
-#             return jsonify({"error": "Update failed"}), 400
-#         return jsonify({"message": "Profile updated successfully!"})
-#     except Exception as e:
-#         return jsonify({"error": str(e)}), 500
-
-
-# Folder for uploaded images
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
-
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
-
-def allowed_file(filename):
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-
 # Update user endpoint
 @app.patch("/update-user/<user_id>")
 def update_user(user_id):
@@ -705,6 +699,8 @@ def update_user(user_id):
         return jsonify({"error": str(e)}), 500
 
 
+
+
 # -------------------- SIGN IN --------------------
 @app.post("/signin")
 def signin():
@@ -725,10 +721,12 @@ def signin():
             "name": user.get("name"),
             "email": user.get("email"),
             "role": user.get("role"),
+            "profileImage": user.get("profileImage", ""),
             "alreadyRegister": user.get("alreadyRegister", False)  # 🔥 include boolean
         }
     })
 
+# -------------------- USERS (lookup by ids) --------------------
 # -------------------- USERS (lookup by ids) --------------------
 @app.get("/users")
 def get_users_by_ids():
@@ -746,24 +744,27 @@ def get_users_by_ids():
     if not oids:
         return jsonify([]), 200
 
+    # ✅ include profileImage in projection
     cursor = users_collection.find(
         {"_id": {"$in": oids}},
-        {"email": 1, "name": 1, "picture": 1, "avatar": 1, "avatar_url": 1, "profile": 1}
+        {"email": 1, "name": 1, "profileImage": 1, "picture": 1, "avatar": 1, "avatar_url": 1, "profile": 1}
     )
 
     out = []
     for u in cursor:
+        # ✅ prefer profileImage, then other possible fields
+        pic = (
+            (u.get("profileImage") or "").strip()
+            or (u.get("picture") or "").strip()
+            or ((u.get("profile") or {}).get("photo") or "").strip()
+            or (u.get("avatar_url") or "").strip()
+            or (u.get("avatar") or "").strip()
+        )
         out.append({
             "_id": str(u["_id"]),
             "email": u.get("email", ""),
             "name": u.get("name", ""),
-            "picture": (
-                u.get("picture")
-                or (u.get("profile") or {}).get("photo")
-                or u.get("avatar_url")
-                or u.get("avatar")
-                or ""
-            )
+            "picture": pic,  # frontend will prefix API_BASE for /uploads/*
         })
     return jsonify(out), 200
 
@@ -796,7 +797,7 @@ def list_members():
             pass
 
     base_filter = {"role": {"$nin": ["admin", "superadmin", "owner"]}}
-    projection = {"email": 1, "name": 1, "avatar": 1, "avatar_url": 1, "picture": 1, "profile": 1, "role": 1}
+    projection = {"email": 1, "name": 1, "avatar": 1, "avatar_url": 1, "picture": 1, "profile": 1, "role": 1,"profileImage": 1,}
 
     cursor = users_collection.find(base_filter, projection)
     out = []
@@ -816,6 +817,7 @@ def list_members():
                 u.get("avatar") or u.get("avatar_url") or
                 u.get("picture") or (u.get("profile") or {}).get("photo") or ""
             ),
+             "profileImage": u.get("profileImage", "")
         })
     return jsonify(out), 200
 
@@ -913,7 +915,8 @@ def recompute_and_store_project_progress(project_oid):
         return  # nothing changed → nothing to notify
 
     # 3) Persist the new progress
-    projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.utcnow()}})
+    projects_collection.update_one({"_id": pid}, {"$set": {"progress": new_pct, "updated_at": datetime.now(timezone.utc)
+}})
 
     # 4) Actor (from headers/body) for exclusion in notifications
     try:
@@ -975,6 +978,97 @@ def recompute_and_store_project_progress(project_oid):
             )
     except Exception:
         pass
+def _as_dt(v):
+    """Coerce task end_at into datetime (UTC) best-effort."""
+    if isinstance(v, datetime):
+        return v
+    if not v:
+        return None
+    try:
+        # ISO string like "2025-09-15T00:00:00Z" or "2025-09-15"
+        return datetime.fromisoformat(str(v).replace("Z","").strip())
+    except Exception:
+        return None
+
+def _already_alerted_recently(task_id: ObjectId, since_dt: datetime) -> bool:
+    """
+    Avoid spamming: if we inserted a 'task_deadline_soon' for this task since 'since_dt', skip.
+    """
+    try:
+        q = {
+            "type": "task_deadline_soon",
+            "created_at": {"$gte": since_dt},
+            "data.task_id": str(task_id)
+        }
+        return notifications_collection.count_documents(q) > 0
+    except Exception:
+        return False
+
+# 1) update function signature and logic
+def scan_upcoming_deadlines(days: int = 7,
+                            lookback_hours: int = 12,
+                            only_for_user: ObjectId | None = None,
+                            include_leader: bool = False) -> dict:
+    now = datetime.now(timezone.utc)
+
+    soon = now + timedelta(days=max(1, int(days)))
+    recent = now - timedelta(hours=max(1, int(lookback_hours)))
+
+    open_status = {"$nin": ["completed", "complete", "done", "finished"]}
+    q = {"status": open_status, "end_at": {"$ne": None}}
+    if only_for_user:
+        q["assignee_id"] = {"$in": [only_for_user, str(only_for_user)]}
+
+    cur = tasks_collection.find(q, {"title": 1, "end_at": 1, "assignee_id": 1, "project_id": 1})
+
+    sent = checked = 0
+    for t in cur:
+        checked += 1
+        end_dt = _as_dt(t.get("end_at"))
+        if not end_dt or not (now <= end_dt <= soon):
+            continue
+        if _already_alerted_recently(t["_id"], recent):
+            continue
+
+        proj = projects_collection.find_one({"_id": t["project_id"]}, {"leader_id": 1, "name": 1})
+        pname = (proj or {}).get("name", "") or "Project"
+        leader_id = (proj or {}).get("leader_id")
+        aid = t.get("assignee_id")
+
+        # recipients: assignee; add leader only if explicitly allowed
+        recipients = []
+        if aid:
+            recipients.append(aid)
+        if include_leader and leader_id and leader_id != aid:
+            recipients.append(leader_id)
+
+        # if we restrict to just one user, enforce strictly
+        if only_for_user:
+            recipients = [r for r in recipients if str(r) == str(only_for_user)]
+
+        if not recipients:
+            continue
+
+        due_str = end_dt.strftime("%b %d, %Y")
+        try:
+            notify_users(
+                user_ids=recipients,
+                kind="task_deadline_soon",
+                title=f"Deadline in {days} day(s) • {pname}",
+                body=f"‘{t.get('title','Task')}’ is due by {due_str}. Please review progress.",
+                data={
+                    "task_id": str(t["_id"]),
+                    "project_id": str(t["project_id"]),
+                    "project_name": pname,
+                    "end_at": end_dt.isoformat() + "Z",
+                    "window_days": int(days)
+                }
+            )
+            sent += len(recipients)
+        except Exception:
+            pass
+
+    return {"checked": checked, "sent": sent}
 
 # -------------------- EXPERIENCE helpers --------------------
 def _safe_load_experience(exp_val):
@@ -999,7 +1093,8 @@ def _safe_load_experience(exp_val):
     return []
 
 def _relative_month_label(dt: datetime) -> str:
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
+
     months = (now.year - dt.year) * 12 + (now.month - dt.month)
     if months <= 0:
         return "This Month"
@@ -1071,10 +1166,38 @@ def _update_users_experience_for_completed_project(pid: ObjectId):
             role = "Member"
         per_user.setdefault(aid_oid, set()).add(role)
 
-    when = datetime.utcnow()
+    when = datetime.now(timezone.utc)
+
     for uid, roles in per_user.items():
         for r in roles:
             _append_experience(uid, r, project_name, when)
+
+# 2) extend the endpoint to accept those flags
+@app.post("/notifications/run_deadline_scan")
+def run_deadline_scan():
+    """
+    POST /notifications/run_deadline_scan
+    Body (all optional):
+      {
+        "days": 7,
+        "lookback_hours": 12,
+        "only_for_user": "<userId or null>",
+        "include_leader": false
+      }
+    """
+    data = request.get_json(silent=True) or {}
+    days = int(data.get("days", 7) or 7)
+    lookback = int(data.get("lookback_hours", 12) or 12)
+    only_for_user = to_object_id(data.get("only_for_user")) if data.get("only_for_user") else None
+    include_leader = bool(data.get("include_leader", False))
+
+    out = scan_upcoming_deadlines(
+        days=days,
+        lookback_hours=lookback,
+        only_for_user=only_for_user,
+        include_leader=include_leader
+    )
+    return jsonify({"ok": True, **out}), 200
 
 @app.route("/projects", methods=["GET", "POST"])
 def projects():
@@ -1148,7 +1271,8 @@ def projects():
         "member_ids": member_ids,
         "start_at": data.get("start_at"),
         "end_at": data.get("end_at"),
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc)
+,
         "progress": int(prog_num),
         "status": status,
         "confirm": int(_normalize_confirm_value(data.get("confirm", 0))),  # keep numeric 0/1 if provided
@@ -1308,7 +1432,8 @@ def project_detail(project_id):
         if not updates:
             return jsonify({"error": "No changes"}), 400
 
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
+
 
         try:
             res = projects_collection.update_one({"_id": pid}, {"$set": updates})
@@ -1616,7 +1741,8 @@ def tasks_collection_handler():
         "progress": int(tprog),
         "project_role": project_role,
         "created_by": created_by,
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc)
+,
     }
     ins = tasks_collection.insert_one(doc)
 
@@ -1760,7 +1886,8 @@ def task_detail(task_id):
         if "status" in data:
             updates["status"] = (data.get("status") or "todo").strip().lower()
 
-        updates["updated_at"] = datetime.utcnow()
+        updates["updated_at"] = datetime.now(timezone.utc)
+
 
         result = tasks_collection.update_one({"_id": tid}, {"$set": updates})
         try:
@@ -1833,8 +1960,11 @@ def task_detail(task_id):
 
         project_id = t["project_id"]
 
-        # socket: task updated
-        socketio.emit("task:updated", patch, namespace="/rt", to=str(project_id))
+       # after you’ve built `patch` / `updates` and know the project_id:
+        safe_patch = _jsonable(patch)  # or _jsonable({"_id": task_id, **updates})
+
+        socketio.emit("task:updated", safe_patch, namespace="/rt", to=str(project_id))
+
 
         # recompute & broadcast project progress
         recompute_and_store_project_progress(project_id)
@@ -1928,16 +2058,7 @@ def get_user(user_id):
         return jsonify({"error": str(e)}), 500
     
 
-# Folder for uploaded images
-UPLOAD_FOLDER = "uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# Serve uploaded images
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
 @app.route("/api/announcement", methods=["POST"])
 def save_announcement():
@@ -1967,7 +2088,8 @@ def save_announcement():
             "message": message,
             "sendTo": send_to,
             "image": filename,
-            "createdAt": datetime.utcnow()
+            "createdAt": datetime.now(timezone.utc)
+
         }
 
         result = announcement_collection.insert_one(announcement)
