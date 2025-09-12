@@ -2,9 +2,9 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaSearch } from "react-icons/fa";
 import { FiMail, FiPhone, FiTrash2 } from "react-icons/fi";
-
+import { API_BASE } from "../config";
 // Prefer importing from a central config
-const API_BASE = "http://localhost:5000";
+// const API_BASE = "http://localhost:5000";
 
 function buildAvatarSrc(profileImage) {
   const v = (profileImage || "").trim();

@@ -11,6 +11,7 @@ import {
   FaSignOutAlt,
   FaBullhorn,
 } from "react-icons/fa";
+import { API_BASE } from "../config";
 
 const LeftSideBar = () => {
   const customColor = "#AA405B";
@@ -63,7 +64,7 @@ const [notifications, setNotifications] = useState(0);
 useEffect(() => {
   const fetchNotifications = async () => {
     try {
-      const res = await fetch(`http://localhost:5000/api/announcement/unread/${user._id}`);
+      const res = await fetch(`${API_BASE}/api/announcement/unread/${user._id}`);
       const data = await res.json();
       setNotifications(data.count);
     } catch (err) {
@@ -81,7 +82,7 @@ useEffect(() => {
 
 const handleAnnouncementClick = async () => {
   try {
-    await fetch(`http://localhost:5000/api/announcement/read-all/${user._id}`, {
+    await fetch(`${API_BASE}/api/announcement/read-all/${user._id}`, {
       method: "PUT"
     });
     setNotifications(0); // clear instantly

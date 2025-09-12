@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import styled from "styled-components";
+import { API_BASE } from "../config";
 
 const Container = styled.div`
   max-width: 800px;
@@ -65,7 +66,7 @@ const AnnouncementDetail = () => {
   useEffect(() => {
     const fetchAnnouncement = async () => {
       try {
-        const res = await fetch(`http://localhost:5000/api/announcement/${id}`);
+        const res = await fetch(`${API_BASE}/api/announcement/${id}`);
         const data = await res.json();
         setAnnouncement(data);
       } catch (err) {

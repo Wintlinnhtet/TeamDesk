@@ -42,7 +42,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
-SERVER_IP = "192.168.1.7"
+SERVER_IP = "172.20.1.227"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -838,7 +838,8 @@ def add_member():
         "position": position,
         "password": hashed_password,
         "role": "member",
-        "alreadyRegister": False  # 🔥 boolean field
+        "alreadyRegister": False,
+        "isLeader": False  # 🔥 boolean field
     })
     return jsonify({"message": "Member added successfully!"}), 201
 
@@ -914,7 +915,8 @@ def signin():
             "email": user.get("email"),
             "role": user.get("role"),
             "profileImage": user.get("profileImage", ""),
-            "alreadyRegister": user.get("alreadyRegister", False)  # 🔥 include boolean
+            "alreadyRegister": user.get("alreadyRegister", False),
+            "isLeader": user.get("isLeader", False)   # 🔥 include boolean
         }
     })
 

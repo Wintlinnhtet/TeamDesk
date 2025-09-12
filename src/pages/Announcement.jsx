@@ -4,16 +4,18 @@ import { Link } from "react-router-dom";
 import { FaSearch } from 'react-icons/fa';
 import { MdCampaign } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
+import { API_BASE } from "../config";
 // put this near imports (or import from a config)
-const API_BASE = "http://localhost:5000";
+// const API_BASE = "http://localhost:5000";
+
 
 // Normalize DB image -> usable <img src>
 function buildAnnImageSrc(image) {
   const v = (image || "").trim();
   if (!v) return "/default-announcement.png";              // React /public fallback
   if (/^https?:\/\//i.test(v)) return v;                   // absolute URL already
-  if (v.startsWith("/src/uploads/")) return `${API_BASE}${v}`; // stored as '/uploads/..'
-  return `${API_BASE}/src/uploads/${v}`;                       // bare filename -> uploads
+  if (v.startsWith("/uploads/")) return `${API_BASE}${v}`; // stored as '/uploads/..'
+  return `${API_BASE}/uploads/${v}`;                       // bare filename -> uploads
 }
 
 const PageContainer = styled.div`
@@ -95,11 +97,18 @@ const Message = styled.p`
 const Announcement = () => {
   const [announcements, setAnnouncements] = useState([]);
   const [loading, setLoading] = useState(true);
+  
 
   // ✅ get user from localStorage
   const user = JSON.parse(localStorage.getItem("user") || "{}");
   const role = (user && user.role) || "member";
-  const isLeader = user.isLeader || true;
+  const isLeader = user.isLeader ?? false;
+
+  
+
+  console.log("Current user:", user);
+console.log("Role:", role);
+console.log("isLeader:", isLeader);
   
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -112,7 +121,8 @@ const Announcement = () => {
   useEffect(() => {
     const fetchAnnouncements = async () => {
       try {
-        const res = await fetch("http://localhost:5000/api/announcement");
+        // const res = await fetch("http://172.20.6.73:5000/api/announcement");
+         const res = await fetch(`${API_BASE}/api/announcement`);
         const data = await res.json();
         setAnnouncements(data);
       } catch (err) {
@@ -143,11 +153,10 @@ const Announcement = () => {
 if (role === "admin") {
   // Admin sees everything
   filteredAnnouncements = announcements;
-} else if (isLeader) {
+} else if  (isLeader) {
   // Leaders see announcements sent to 'all' or 'team_leader'
-  filteredAnnouncements = announcements.filter(
-    (a) => a.sendTo === "all" || a.sendTo === "team_leader"
-  );
+  filteredAnnouncements = announcements;
+
 } else if (role === "member") {
   // Normal members see only 'all'
   filteredAnnouncements = announcements.filter((a) => a.sendTo === "all");
@@ -235,7 +244,7 @@ if (role === "admin") {
             onClick={async () => {
               if (window.confirm("Are you sure you want to delete this announcement?")) {
                 try {
-                  await fetch(`http://localhost:5000/api/announcement/${a.id}`, {
+                  await fetch(`${API_BASE}/api/announcement/${a.id}`, {
                     method: "DELETE",
                   });
                   setAnnouncements(announcements.filter((ann) => ann.id !== a.id)); // ✅ remove from UI
@@ -268,5 +277,3 @@ if (role === "admin") {
 };
 
 export default Announcement;
-
-

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import styled from 'styled-components';
 import { useParams, useNavigate } from "react-router-dom";
+import { API_BASE } from "../config";
 
 const Container = styled.div`
   background: white;
@@ -141,13 +142,10 @@ const Input = styled.input`   /* ✅ New input for title */
 const Announce = () => {
   const [title, setTitle] = useState(''); // ✅ New title state
   const [announcementText, setAnnouncementText] = useState('');
-  const [image, setImage] = useState(null);
+
   const [role, setRole] = useState('all');
   const navigate = useNavigate();
 
-  const handleImageChange = (event) => {
-    setImage(event.target.files[0]);
-  };
 
   const handleSubmit = async (event) => {
     event.preventDefault();
@@ -161,10 +159,10 @@ const Announce = () => {
     formData.append('title', title); // ✅ send title to backend
     formData.append('message', announcementText);
     formData.append('sendTo', role); // 'all' or 'team_leader'
-    if (image) formData.append('image', image);
+   
 
     try {
-      const response = await fetch('http://localhost:5000/api/announcement', {
+      const response = await fetch(`${API_BASE}/api/announcement`, {
         method: 'POST',
         body: formData,
       });
@@ -173,7 +171,7 @@ const Announce = () => {
 
       // Reset form
       setAnnouncementText('');
-      setImage(null);
+     
       setRole('all');
       alert('Announcement sent successfully!');
       navigate("/announcement"); // ✅ redirect back
@@ -208,16 +206,7 @@ const Announce = () => {
           />
         </FormGroup>
 
-        <FormGroup>
-          <Label>Attach Image (Optional)</Label>
-          <FileInput type="file" id="imageInput" accept="image/*" onChange={handleImageChange} />
-          <FileLabel htmlFor="imageInput">📷 Click to upload an image</FileLabel>
-          {image && (
-            <ImagePreview style={{ display: 'block' }}>
-              <img src={URL.createObjectURL(image)} alt="Preview" />
-            </ImagePreview>
-          )}
-        </FormGroup>
+        
 
         <FormGroup>
           <Label>Send to</Label>

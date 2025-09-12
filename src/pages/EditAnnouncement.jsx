@@ -15,6 +15,7 @@ import {
   SubmitButton,
   Input,
 } from "./Announce"; // ✅ Reuse styled components from Announce.jsx
+import { API_BASE } from "../config";
 
 const EditAnnouncement = () => {
   const { id } = useParams();
@@ -30,7 +31,7 @@ const EditAnnouncement = () => {
     // ✅ Fetch existing data
     const fetchAnnouncement = async () => {
       try {
-        const res = await fetch(`http://localhost:5000/api/announcement/${id}`);
+        const res = await fetch(`${API_BASE}/api/announcement/${id}`);
         const data = await res.json();
 
         setTitle(data.title || "");
@@ -58,7 +59,7 @@ const EditAnnouncement = () => {
     if (image) formData.append("image", image);
 
     try {
-      const res = await fetch(`http://localhost:5000/api/announcement/${id}`, {
+      const res = await fetch(`${API_BASE}/api/announcement/${id}`, {
         method: "PUT",
         body: formData,
       });
@@ -114,7 +115,7 @@ const EditAnnouncement = () => {
         src={
           existingImage.startsWith("http")
             ? existingImage // use full URL if stored in DB
-            : `http://localhost:5000/uploads/${existingImage}` // otherwise prefix
+            : `${API_BASE}/uploads/${existingImage}` // otherwise prefix
         }
         alt="Existing"
       />
