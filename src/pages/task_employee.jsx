@@ -564,7 +564,7 @@ const Task = () => {
 
             
           </div>
-          <FaBell style={{ color: customColor }} />
+         
         </div>
 
         <div className="grid grid-cols-2 gap-2 mb-6">

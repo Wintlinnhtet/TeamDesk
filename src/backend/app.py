@@ -43,6 +43,7 @@ CORS(app)  # Your existing CORS setup //y2
 
 # === CHANGE THIS to the server PC's LAN IP shown by Vite as "Network" ===
 SERVER_IP = "172.20.1.227"
+SERVER_IP = "172.20.1.227"
 
 FRONTEND_ORIGINS = [
     "http://localhost:5173",
@@ -2368,6 +2369,7 @@ def delete_user(user_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     
+    
 
 @app.route("/api/user/<user_id>", methods=["GET"])
 def get_user_profile(user_id):
@@ -2464,8 +2466,50 @@ def unread_count(user_id):
         return jsonify({"error": str(e)}), 500
 
 
+ # logs histories
+logs_db = []
+@app.route("/api/histories", methods=["GET"])
+def get_histories():
+    user_id = request.headers.get("X-User-Id")
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 20))
+    username = request.args.get("username", "").lower()
+    foldername = request.args.get("foldername", "").lower()
+    filename = request.args.get("filename", "").lower()
+
+    filtered = [
+        log for log in logs_db
+        if (username in log.get("username", "").lower())
+        and (foldername in log.get("folder_name", "").lower())
+        and (filename in log.get("file_name", "").lower())
+    ]
+
+    total = len(filtered)
+    start = (page - 1) * per_page
+    end = start + per_page
+    return jsonify({"histories": filtered[start:end], "total": total})
+
+# ---------------- SocketIO ----------------
+@socketio.on("connect")
+def on_connect():
+    print(f"Client connected: {request.sid}")
+
+@socketio.on("disconnect")
+def on_disconnect():
+    print(f"Client disconnected: {request.sid}")
+
+# Custom event for creating logs
+@app.route("/api/logs/create", methods=["POST"])
+def create_log():
+    data = request.json
+    data["_id"] = str(len(logs_db) + 1)
+    data["timestamp"] = datetime.utcnow().isoformat()
+    logs_db.insert(0, data)
+    socketio.emit("log:created", data)
+    return jsonify({"success": True, "log": data})
+
 # -------------------- bind to LAN --------------------
-if __name__ == "__main__":
+if __name__ == "__main__":   
     print("✅ Connected to MongoDB!")
     print(f"📂 Available collections: {list(db.list_collection_names())}")
     socketio.run(app, host="0.0.0.0", port=5000, debug=True)

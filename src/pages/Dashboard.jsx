@@ -343,39 +343,42 @@ useRealtime(null, {
               )}
             </div>
 
-            {/* Files (demo) */}
-            <div className="bg-white rounded-xl p-4 w-1/2 shadow-md flex justify-between items-start">
-              <div className="w-3/4">
-                <div className="flex justify-between items-center mb-2">
-                  <h2 className="text-lg font-semibold" style={{ color: customColor }}>
-                    File Uploaded <span className="text-sm" style={{ color: customColor }}>(12)</span>
-                  </h2>
-                </div>
-                {[
-                  { title: "Colour Theory", date: "01 Feb 2024" },
-                  { title: "Design system", date: "01 Feb 2024" },
-                  { title: "User persona", date: "13 Mar 2024" },
-                  { title: "Prototyping", date: "16 Mar 2024" },
-                ].map((item, index) => (
-                  <div key={index} className="flex justify-between items-start mb-3">
-                    <div className="flex items-start space-x-2">
-                      <div className="w-5 h-5 rounded-full flex items-center justify-center mt-1" style={{ backgroundColor: customColor }}>
-                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-black">{item.title}</p>
-                        <p className="text-xs text-gray-400 mb-2">{item.date}</p>
-                      </div>
+             <div className="rounded-xl p-2 w-full mb-3" style={{ backgroundColor: customColor }}>
+            <h2 className="text-center font-semibold text-lg mb-4 text-white">Batchmates</h2>
+            {batchmates.length === 0 ? (
+              <div className="bg-white rounded-lg p-3 text-center text-sm text-gray-500">
+                No teammates yet
+              </div>
+            ) : (
+              batchmates.slice(0, 6).map((mate) => (
+                <div key={mate._id} className="flex items-center bg-white rounded-lg p-2 mb-2">
+                  {mate.img ? (
+                    <img
+                      src={mate.img}
+                      alt={mate.name}
+                      className="w-10 h-10 rounded-full object-cover"
+                      onError={(e) => { e.currentTarget.src = ""; }}
+                    />
+                  ) : (
+                    <div
+                      className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
+                      style={{ backgroundColor: customColor }}
+                      aria-label={mate.name}
+                    >
+                      {initials(mate.name)}
                     </div>
+                  )}
+                  <div className="ml-3 min-w-0">
+                    <p className="text-sm font-medium text-gray-800 truncate">{mate.name}</p>
+                    <p className="text-xs truncate" style={{ color: customColor }}>
+                      {mate.title}
+                    </p>
                   </div>
-                ))}
-              </div>
-              <div className="w-1/4 flex justify-end mt-10 mr-5">
-                <img src="file.png" alt="File Icon" className="w-30 h-30 object-contain" />
-              </div>
-            </div>
+                </div>
+              ))
+            )}
+            
+          </div>
           </div>
         </div>
 
@@ -429,43 +432,7 @@ useRealtime(null, {
             </div>
           </div>
 
-          {/* Batchmates */}
-          <div className="rounded-xl p-2 w-full mb-3" style={{ backgroundColor: customColor }}>
-            <h2 className="text-center font-semibold text-lg mb-4 text-white">Batchmates</h2>
-            {batchmates.length === 0 ? (
-              <div className="bg-white rounded-lg p-3 text-center text-sm text-gray-500">
-                No teammates yet
-              </div>
-            ) : (
-              batchmates.slice(0, 6).map((mate) => (
-                <div key={mate._id} className="flex items-center bg-white rounded-lg p-2 mb-2">
-                  {mate.img ? (
-                    <img
-                      src={mate.img}
-                      alt={mate.name}
-                      className="w-10 h-10 rounded-full object-cover"
-                      onError={(e) => { e.currentTarget.src = ""; }}
-                    />
-                  ) : (
-                    <div
-                      className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold"
-                      style={{ backgroundColor: customColor }}
-                      aria-label={mate.name}
-                    >
-                      {initials(mate.name)}
-                    </div>
-                  )}
-                  <div className="ml-3 min-w-0">
-                    <p className="text-sm font-medium text-gray-800 truncate">{mate.name}</p>
-                    <p className="text-xs truncate" style={{ color: customColor }}>
-                      {mate.title}
-                    </p>
-                  </div>
-                </div>
-              ))
-            )}
-            
-          </div>
+          
         </div>
       </div>
     </div>
