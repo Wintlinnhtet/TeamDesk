@@ -320,62 +320,58 @@ def create_folder_route():
 
 # ------------------ Upload File ------------------
 @file_sharing_bp.post("/folders/<folder_id>/files")
-
-@file_sharing_bp.post("/folders/<folder_id>/files")
 def upload_file(folder_id):
     user = get_current_user()
+    
     if not user:
         return jsonify({"error": "Unauthorized"}), 401
-
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
-
-    folder_oid = safe_objectid(folder_id)
-    if not folder_oid:
+    try:
+        folder_oid = ObjectId(folder_id)
+    except:
         return jsonify({"error": "Invalid folder id"}), 400
 
     folder = folders_collection.find_one({"_id": folder_oid})
     if not folder:
         return jsonify({"error": "Folder not found"}), 404
 
+        project = projects_collection.find_one({"_id": folder.get("project_id")})
+        if user.get("role") != "admin" and user["_id"] != project.get("leader_id") and user["_id"] not in project.get("member_ids", []):
+            return jsonify({"error": "Unauthorized"}), 403
     project = projects_collection.find_one({"_id": folder["project_id"]})
     if not project:
         return jsonify({"error": "Project not found"}), 404
 
-    # Permission check
-    if (
-        user.get("role") != "admin"
-        and user["_id"] != project.get("leader_id")
-        and user["_id"] not in project.get("member_ids", [])
-    ):
+    # Check access
+    if user.get("role") != "admin" and user["_id"] != project["leader_id"] and user["_id"] not in project.get("member_ids", []):
         return jsonify({"error": "Unauthorized"}), 403
 
     uploaded_files = []
 
-    # Single loop – correct version
     for file in request.files.getlist("file"):
-        if not file.filename:
+            if not file.filename:
+                continue
+    # Loop through all uploaded files
+    for file in request.files.getlist("file"):
+        if file.filename == "":
             continue
 
-        filename = secure_filename(file.filename)
-        created_at = datetime.now(timezone.utc)
-
-        # Determine file size
+        # Get file size
         file.seek(0, os.SEEK_END)
         size = file.tell()
         file.seek(0)
-
-        # Reject files >50MB
         if size > 50 * 1024 * 1024:
-            continue
+            continue  # skip too large files
 
-        # LOCAL STORAGE
+            filename = secure_filename(file.filename)
+            created_at = datetime.now(timezone.utc)
+        filename = secure_filename(file.filename)
+
         if size <= LOCAL_FILE_THRESHOLD:
-            save_path = os.path.join(
-                UPLOAD_FOLDER, f"{created_at.timestamp()}_{filename}"
-            )
+            # Save locally
+            save_path = os.path.join(UPLOAD_FOLDER, f"{created_at.timestamp()}_{filename}")
             file.save(save_path)
-
             file_doc = {
                 "folder_id": folder_oid,
                 "filename": filename,
@@ -385,44 +381,79 @@ def upload_file(folder_id):
                 "storage": "local",
                 "createdAt": created_at,
                 "uploaded_by": user["_id"],
-                "uploader_role": user.get("role"),
+                "uploader_role": user.get("role")
             }
-
             res = files_collection.insert_one(file_doc)
-            file_doc["_id"] = res.inserted_id
-
-        # GRIDFS STORAGE
+            file_doc = files_collection.find_one({"_id": res.inserted_id})
         else:
-            file.seek(0)
-            grid_id = fs.put(
-                file,
-                filename=filename,
-                content_type=file.mimetype,
-                folder_id=folder_oid,
-                uploaded_at=created_at,
-            )
+                # Save to GridFS
+                file.seek(0)
+                gridfs_id = fs.put(file, filename=filename, content_type=file.mimetype,
+                                   folder_id=folder_oid, uploaded_at=created_at)
+                file_doc = {
+                    "_id": gridfs_id,
+                    "folder_id": folder_oid,
+                    "filename": filename,
+                    "size": size,
+                    "mimetype": file.mimetype,
+                    "storage": "gridfs",
+                    "uploaded_by": user["_id"],
+                    "uploader_role": user.get("role"),
+                    "createdAt": created_at
+                }
+                files_collection.insert_one(file_doc)
+
+        uploaded_files.append(file_doc)
+
+        # Serialize files for UI and socket
+        serialized_files = [serialize_doc(f, doc_type="file") for f in uploaded_files]
+
+        # Emit to socket only once per file
+        for raw_doc, serialized in zip(uploaded_files, serialized_files):
+            socketio.emit("file:uploaded", serialized, namespace="/rt")
+            try:
+                log_action(user, "upload_file", folder=folder, file=raw_doc)
+            except Exception as e:
+                print("❌ log_action failed:", e)
+
+
+        return jsonify({"uploaded": serialized_files}), 201
+        if size < LOCAL_FILE_THRESHOLD:
+            save_path = os.path.join(UPLOAD_FOLDER, filename)
+            file.save(save_path)
 
             file_doc = {
-                "_id": grid_id,
+                "folder_id": folder_oid,
+                "filename": filename,
+                "path": save_path,
+                "size": size,
+                "mimetype": file.mimetype,
+                "storage": "local",
+                "createdAt": datetime.utcnow(),
+                "uploaded_by": user["_id"],
+                "uploader_role": user.get("role")
+            }
+            res = files_collection.insert_one(file_doc)
+            file_doc["_id"] = str(res.inserted_id)
+        else:
+            grid_file_id = fs.put(file, filename=filename, content_type=file.mimetype,
+                                  folder_id=folder_oid, uploaded_at=datetime.utcnow())
+            file_doc = {
+                "_id": str(grid_file_id),
                 "folder_id": folder_oid,
                 "filename": filename,
                 "size": size,
                 "mimetype": file.mimetype,
                 "storage": "gridfs",
-                "createdAt": created_at,
                 "uploaded_by": user["_id"],
-                "uploader_role": user.get("role"),
+                "uploader_role": user.get("role")
             }
             files_collection.insert_one(file_doc)
-
-        uploaded_files.append(file_doc)
-
-        # Log + socket
-        socketio.emit("file:uploaded", serialize_doc(file_doc, "file"), namespace="/rt")
-        log_action(user, "upload_file", folder=folder, file=file_doc)
-
-    # Return uploaded files
-    return jsonify({"uploaded": [serialize_doc(f, "file") for f in uploaded_files]}), 201
+    uploaded_files.append(file_doc)
+    # Emit for each uploaded file
+    for f in uploaded_files:
+        socketio.emit("file:uploaded", f, namespace="/rt")
+    return jsonify({"uploaded": uploaded_files}), 201
 
 @file_sharing_bp.get("/files/<file_id>")
 def view_file(file_id):
